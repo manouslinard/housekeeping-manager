@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Housekeeping Manager</title>
+<link rel="icon" href="data:,">
+<style>
+:root{--bg:#f4f5f9;--card:#fff;--ink:#14161f;--mute:#6b7280;--line:#e8eaf0;--accent:#5b5bf0;--accent2:#8b5cf6;--occ:#e8eaff;--occ-ink:#3730a3;--sun:#f7f8fb;--shadow:0 1px 2px #1118270d,0 8px 24px -12px #11182733;
+  --pending:#9ca3af;--offering:#f59e0b;--assigned:#10b981;--unfilled:#ef4444;--completed:#6366f1}
+@media (prefers-color-scheme:dark){:root{--bg:#0d0f15;--card:#161923;--ink:#eceef4;--mute:#99a0b0;--line:#252a37;--accent:#7c7cff;--accent2:#a78bfa;--occ:#242a52;--occ-ink:#c7ccff;--sun:#1a1e29;--shadow:0 1px 2px #0006,0 8px 24px -12px #000a}}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.45 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column}
+header{display:flex;gap:8px;align-items:center;padding:10px 20px;background:color-mix(in srgb,var(--card) 85%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.brand{font-weight:700;font-size:15px;margin-right:10px;display:flex;align-items:center;gap:8px}
+.brand i{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;font-style:normal;font-size:14px}
+header .sp{flex:1}
+button,select,input{font:inherit;color:inherit}
+button{border:1px solid var(--line);background:var(--card);padding:7px 13px;border-radius:10px;cursor:pointer;transition:.15s}
+button:hover{border-color:var(--accent);transform:translateY(-1px)}
+button.pri{background:linear-gradient(135deg,var(--accent),var(--accent2));border:0;color:#fff;font-weight:500;box-shadow:0 4px 12px -4px var(--accent)}
+button.danger{color:var(--unfilled)}
+select,input{border:1px solid var(--line);background:var(--card);padding:7px 10px;border-radius:10px;width:100%;outline:none}
+select:focus,input:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 20%,transparent)}
+header select,header input{width:auto}
+main{flex:1;overflow:auto;padding:20px;display:flex;flex-direction:column;gap:22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+.scroll{overflow:auto;max-height:68vh;border-radius:14px 14px 0 0}
+table{border-collapse:separate;border-spacing:0;min-width:100%}
+th,td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:0;text-align:center;font-size:12px;min-width:92px;height:40px}
+th{position:sticky;top:0;background:var(--card);z-index:2;height:46px;font-weight:600}
+th small{display:block;color:var(--mute);font-weight:400}
+th:first-child,td:first-child{position:sticky;left:0;z-index:1;min-width:150px;text-align:left;padding-left:14px;background:var(--card);font-weight:500}
+th:first-child{z-index:3}
+tr.hotel td{background:var(--bg);font-weight:600;height:30px;color:var(--mute);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.sun{background:var(--sun)}
+th.today,th.today small{color:var(--accent)}
+.occ{background:var(--occ);color:var(--occ-ink);cursor:pointer;font-weight:500;transition:.12s}
+.occ:hover{filter:brightness(.95)}
+.occ.in{box-shadow:inset 3px 0 0 var(--accent)}
+.occ span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:88px;margin:0 auto}
+.chip{display:inline-block;max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 8px;border-radius:99px;color:#fff;font-size:11px;vertical-align:middle;box-shadow:0 2px 6px -2px #0006}
+.chip.pending{background:var(--pending)}.chip.offering{background:var(--offering)}.chip.assigned{background:var(--assigned)}
+.chip.unfilled{background:var(--unfilled)}.chip.completed{background:var(--completed)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--mute);font-size:12px;padding:10px 16px;border-top:1px solid var(--line);align-items:center}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;padding:0;box-shadow:none;max-width:none}
+h2{margin:0 0 12px;font-size:15px;display:flex;align-items:center;gap:8px}
+h2 small{color:var(--mute);font-weight:400}
+.cleaners{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px}
+.cl{padding:14px 16px}
+.cl .top{display:flex;gap:12px;align-items:center}
+.av{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:600;flex:none}
+.cl b{display:block}
+.meta{color:var(--mute);font-size:12px}
+.cl .x{margin-left:auto;border:0;padding:2px 8px;color:var(--mute);background:none}
+.cl .x:hover{color:var(--unfilled);transform:none}
+.tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:99px;background:var(--bg);color:var(--mute);margin-right:4px}
+.jobs{margin-top:10px;display:flex;flex-direction:column;gap:5px;font-size:12px}
+.jobs div{display:flex;gap:8px;align-items:center;padding:4px 8px;border-radius:8px;background:var(--bg)}
+.jobs div span:first-child{font-weight:600;min-width:64px}
+.none{color:var(--mute);font-size:12px;margin-top:10px}
+.ferr{color:var(--unfilled);font-size:12px;margin:8px 0 0}.ferr:empty{display:none}
+tr.flash td{animation:fl 2s}@keyframes fl{from{background:color-mix(in srgb,var(--accent) 35%,transparent)}}
+tr.hotel .x{border:0;background:none;padding:0 8px;font-size:11px;color:var(--mute);text-transform:none;letter-spacing:0}tr.hotel .x:hover{color:var(--unfilled);transform:none}
+.empty{color:var(--mute);padding:48px;text-align:center}
+dialog{border:1px solid var(--line);border-radius:18px;background:var(--card);color:var(--ink);padding:22px;width:min(440px,92vw);box-shadow:0 24px 60px -12px #0007}
+dialog::backdrop{background:#0008;backdrop-filter:blur(3px)}
+dialog h3{margin:0 0 12px}
+label{display:block;margin:8px 0;color:var(--mute);font-size:12px}
+label input,label select{margin-top:3px;color:var(--ink)}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:9px 16px;border-radius:10px;opacity:0;transition:.2s;pointer-events:none;box-shadow:var(--shadow)}
+#toast.on{opacity:1}#toast.err{background:var(--unfilled)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><i>🏨</i>Housekeeping Manager</div>
+  <select id="view" title="Επίπεδο ανάλυσης"><option value="day">Ανάλυση: Ημέρα</option><option value="hour">Ανάλυση: Ώρα</option></select>
+  <button id="prev">‹</button><input type="date" id="start"><button id="next">›</button>
+  <button id="todayBtn">Σήμερα</button>
+  <span class="sp"></span>
+  <button data-open="dBooking">+ Κράτηση</button>
+  <button data-open="dImport">⇪ Excel</button>
+  <button class="pri" data-open="dCleaner">+ Καθαρίστρια</button>
+  <button class="pri" data-open="dRoom">+ Ξενοδοχείο</button>
+</header>
+<main>
+  <section><div class="card"><div class="scroll" id="grid"></div><div class="legend" id="legend"></div></div></section>
+  <section><h2>Καθαρίστριες <small id="ccount"></small></h2><div class="cleaners" id="people"></div></section>
+</main>
+
+<dialog id="dCleaner"><form method="dialog" data-api="/api/cleaners">
+  <h3>Νέα καθαρίστρια</h3>
+  <label>Όνομα<input name="name" required></label>
+  <label>Τηλέφωνο (Telegram)<input name="phone" required placeholder="+30 690 000 0000"></label>
+  <label>Διεύθυνση<input name="address" required placeholder="Οδός, αριθμός, πόλη"></label>
+  <p class="ferr"></p>
+  <div class="actions"><button type="button" data-close>Άκυρο</button><button class="pri">Προσθήκη</button></div>
+</form></dialog>
+
+<dialog id="dRoom"><form method="dialog" data-api="/api/rooms">
+  <h3>Νέο ξενοδοχείο / δωμάτια</h3>
+  <label>Όνομα ξενοδοχείου<input name="hotel" required list="hotels"></label>
+  <label>Διεύθυνση ξενοδοχείου<input name="address" required placeholder="Οδός, αριθμός, πόλη"></label>
+  <div class="row">
+    <label>Αριθμοί δωματίων<input name="rooms" required placeholder="1-16 ή 1,2,7"></label>
+    <label>Τυπική ώρα check-out<input name="checkout_time" type="time" value="11:00"></label>
+  </div>
+  <p class="meta">Αριθμοί δωματίων: <b>1-16</b> δημιουργεί 16 δωμάτια (1 έως 16)· <b>5</b> δημιουργεί μόνο το δωμάτιο 5. Η ώρα check-out ισχύει για κρατήσεις που δεν έχουν δική τους ώρα. Υπάρχον ξενοδοχείο: προσθέτει μόνο τα νέα δωμάτια.</p>
+  <p class="ferr"></p>
+  <div class="actions"><button type="button" data-close>Άκυρο</button><button class="pri">Προσθήκη</button></div>
+</form></dialog>
+<datalist id="hotels"></datalist>
+
+<dialog id="dBooking"><form method="dialog" data-api="/api/bookings">
+  <h3>Νέα κράτηση</h3>
+  <label>Δωμάτιο<select name="property_id" required></select></label>
+  <div class="row">
+    <label>Check-in<input type="date" name="checkin_date" required></label>
+    <label>Ώρα<input type="time" name="checkin_time" value="15:00"></label>
+  </div>
+  <div class="row">
+    <label>Check-out<input type="date" name="checkout_date" required></label>
+    <label>Ώρα<input type="time" name="checkout_time" value="11:00"></label>
+  </div>
+  <div class="row">
+    <label>Όνομα επισκέπτη<input name="guest_name"></label>
+    <label>Άτομα<input type="number" name="guests" min="1"></label>
+  </div>
+  <p class="ferr"></p>
+  <div class="actions"><button type="button" data-close>Άκυρο</button><button class="pri">Προσθήκη</button></div>
+</form></dialog>
+
+<dialog id="dImport"><form method="dialog" data-api="/api/import" data-multipart>
+  <h3>Εισαγωγή κρατήσεων από Excel</h3>
+  <label>Ξενοδοχείο<select name="hotel"></select></label>
+  <label>Αρχείο .xlsx<input type="file" name="file" accept=".xlsx" required></label>
+  <p style="color:var(--mute);font-size:12px;margin:8px 0 0">Ελάχιστες στήλες: δωμάτιο, check-in, check-out (προαιρετικά όνομα, ώρες, άτομα). Οι γραμμές «Συντήρηση» αγνοούνται. Αν το δωμάτιο έχει ήδη κράτηση τις ίδιες ημέρες, η γραμμή παραλείπεται. Νέα δωμάτια δημιουργούνται αυτόματα.</p>
+  <p class="ferr"></p>
+  <div class="actions"><button type="button" data-close>Άκυρο</button><button class="pri">Εισαγωγή</button></div>
+</form></dialog>
+
+<dialog id="dDetail"><h3 id="dtTitle"></h3><div id="dtBody"></div>
+  <div class="actions"><button class="danger" id="dtDel">Διαγραφή κράτησης</button><button data-close>Κλείσιμο</button></div>
+</dialog>
+<div id="toast"></div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const DAYS = ["Κυρ","Δευ","Τρί","Τετ","Πέμ","Παρ","Σάβ"];
+const STATUS = {offering:"Ζητήθηκε", assigned:"Ανατέθηκε", unfilled:"Δεν βρέθηκε"};
+const UI_STATUS = {pending:"offering", completed:"assigned"}; // backend has 2 more states; the UI shows only the 3 above
+const NDAYS = 14, H0 = 6, H1 = 23;
+let S = {rooms:[], cleaners:[], bookings:[], jobs:[], today:""};
+const iso = d => d.toISOString().slice(0, 10);
+const addDays = (s, n) => { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
+const dow = s => new Date(s + "T00:00:00Z").getUTCDay();
+
+function toast(msg, err) { const t = $("#toast"); t.textContent = msg; t.className = "on" + (err ? " err" : ""); clearTimeout(t.t); t.t = setTimeout(() => t.className = "", 3500); }
+
+async function api(path, opts = {}) {
+  const headers = {...(opts.headers || {}), "X-Admin-Token": localStorage.token || ""};
+  let r = await fetch(path, {...opts, headers});
+  if (r.status === 401 || r.status === 403) {
+    const t = prompt("Admin token:");
+    if (!t) throw new Error("Απαιτείται token");
+    localStorage.token = t;
+    return api(path, opts);
+  }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Σφάλμα " + r.status);
+  return data;
+}
+
+async function load() {
+  S = await api("/api/state");
+  if (!$("#start").value) $("#start").value = new URLSearchParams(location.search).get("start") || S.today;
+  fillSelects();
+  render();
+}
+
+const COLORS = ["#6366f1","#ec4899","#10b981","#f59e0b","#0ea5e9","#8b5cf6","#ef4444","#14b8a6"];
+const fmtD = d => `${DAYS[dow(d)]} ${d.slice(8)}/${d.slice(5, 7)}`;
+function renderCleaners() {
+  $("#ccount").textContent = S.cleaners.length ? `(${S.cleaners.length})` : "";
+  if (!S.cleaners.length) { $("#people").innerHTML = `<div class="none">Δεν υπάρχουν καθαρίστριες ακόμη (+ Καθαρίστρια).</div>`; return; }
+  const room = id => { const r = S.rooms.find(x => x.id === id); return r ? (r.room ? "Δωμ. " + r.room : r.name) : id; };
+  $("#people").innerHTML = S.cleaners.map((c, i) => {
+    const mine = S.jobs.filter(j => j.cleaner_id === c.id && j.checkout_date >= S.today).sort((a, b) => a.checkout_date.localeCompare(b.checkout_date));
+    const asked = S.jobs.filter(j => j.offered_id === c.id && !j.cleaner_id && j.checkout_date >= S.today);
+    const ini = c.name.split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase();
+    return `<div class="card cl"><div class="top"><div class="av" style="background:${COLORS[i % COLORS.length]}">${esc(ini)}</div>
+      <div><b>${esc(c.name)}</b><span class="meta">${esc(c.phone)}</span></div>
+      <button class="x" data-del-cleaner="${c.id}" title="Αφαίρεση">✕</button></div>
+      <div class="meta" style="margin-top:8px">📍 ${esc(c.address || "—")}</div>
+      <div style="margin-top:6px"><span class="tag">${esc(c.channel)}</span><span class="tag">έως ${c.max_jobs_per_day}/ημέρα</span><span class="tag">${mine.length} αναθέσεις</span>${asked.length ? `<span class="tag" style="color:var(--offering)">${asked.length} σε εκκρεμότητα</span>` : ""}</div>
+      ${asked.length ? `<div class="jobs">${asked.slice(0, 3).map(j => `<div><span>${fmtD(j.checkout_date)}</span><span>${esc(room(j.property_id))}</span><span class="meta">${j.queued ? "⏳ στην ουρά" : "ζητήθηκε"} · ${j.offered_km.toFixed(1)} χλμ</span></div>`).join("")}</div>` : ""}
+      ${mine.length ? `<div class="jobs">${mine.slice(0, 5).map(j => `<div><span>${fmtD(j.checkout_date)}</span><span>${esc(room(j.property_id))}</span><span class="meta">${esc(j.checkout_time)}</span></div>`).join("")}${mine.length > 5 ? `<div class="meta">+${mine.length - 5} ακόμη</div>` : ""}</div>`
+      : `<div class="none">Καμία ανάθεση ακόμη</div>`}</div>`;
+  }).join("");
+}
+
+// ---------- grid ----------
+function render() {
+  const view = $("#view").value, start = $("#start").value || S.today;
+  const rooms = S.rooms;
+  renderCleaners();
+  $("#legend").innerHTML = Object.entries(STATUS).map(([k, v]) => `<span><i class="dot chip ${k}"></i>${v}</span>`).join("")
+    + `<span>🧹 καθαρισμός check-out</span><span>✨ ενδιάμεσος καθαρισμός (κάθε 3 ημέρες διαμονής)</span><span>Κυριακή → Δευτέρα</span>`;
+  if (!rooms.length) { $("#grid").innerHTML = `<div class="empty">Πρόσθεσε ένα ξενοδοχείο και δωμάτια (+ Ξενοδοχείο) και μετά κρατήσεις ή Excel.</div>`; return; }
+
+  const cols = view === "day"
+    ? Array.from({length: NDAYS}, (_, i) => addDays(start, i))
+    : Array.from({length: H1 - H0 + 1}, (_, i) => H0 + i);
+  const head = cols.map(c => view === "day"
+    ? `<th class="${dow(c) === 0 ? "sun" : ""} ${c === S.today ? "today" : ""}">${c.slice(8)}/${c.slice(5, 7)}<small>${DAYS[dow(c)]}</small></th>`
+    : `<th>${String(c).padStart(2, "0")}:00</th>`).join("");
+
+  const jobs = {};
+  S.jobs.forEach(j => (jobs[j.property_id + "|" + j.checkout_date] ||= []).push(j));
+  const byRoom = {};
+  S.bookings.forEach(b => (byRoom[b.property_id] ||= []).push(b));
+
+  let html = `<table><thead><tr><th>Δωμάτιο</th>${head}</tr></thead><tbody>`, lastHotel = null;
+  for (const r of rooms) {
+    const hotel = r.hotel || r.name;
+    if (hotel !== lastHotel) { html += `<tr class="hotel" data-hotel="${esc(hotel)}"><td colspan="${cols.length + 1}">${esc(hotel)} <button class="x" data-del-hotel="${esc(hotel)}" title="Διαγραφή ξενοδοχείου">✕ διαγραφή</button></td></tr>`; lastHotel = hotel; }
+    html += `<tr><td title="${esc(r.address)}">${esc(r.room ? "Δωμάτιο " + r.room : r.name)}</td>`;
+    const bks = byRoom[r.id] || [];
+    for (const c of cols) html += view === "day" ? dayCell(r, bks, jobs, c) : hourCell(r, bks, jobs, start, c);
+    html += `</tr>`;
+  }
+  $("#grid").innerHTML = html + `</tbody></table>`;
+}
+
+function chip(j) {
+  const st = UI_STATUS[j.status] || j.status;
+  const first = n => n.split(" ")[0];
+  const who = j.cleaner ? first(j.cleaner) : j.offered_to ? (j.queued ? "⏳ " : "") + first(j.offered_to) : STATUS[st];
+  const asked = !j.cleaner && j.offered_to ? ` · ${j.queued ? "θα ζητηθεί από" : "ζητήθηκε από"} ${esc(j.offered_to)} (${j.offered_km.toFixed(1)} χλμ)${j.queued ? " – δεν έχει σταλεί ακόμη" : ""}` : "";
+  const icon = j.kind === "stay" ? "✨" : "🧹", what = j.kind === "stay" ? "Ενδιάμεσος καθαρισμός" : "Καθαρισμός check-out";
+  return `<span class="chip ${st}" title="${what} · ${esc(STATUS[st])}${j.cleaner ? " · " + esc(j.cleaner) : asked} · ${esc(j.checkout_time)}">${icon} ${esc(who)}</span>`;
+}
+
+function dayCell(r, bks, jobs, d) {
+  const b = bks.find(b => b.checkin_date <= d && d < b.checkout_date);
+  const out = bks.find(b => b.checkout_date === d);
+  const js = jobs[r.id + "|" + d] || [];
+  const sun = dow(d) === 0 ? "sun" : "";
+  if (b) return `<td class="occ ${b.checkin_date === d ? "in" : ""}" data-b="${b.id}" title="${esc(b.guest_name)} ${esc(b.checkin_date)} → ${esc(b.checkout_date)}"><span>${esc(b.guest_name || "●")}</span>${js.map(chip).join("")}</td>`;
+  return `<td class="${sun}">${out ? `<span style="color:var(--mute)" data-b="${out.id}">↩ ${out.checkout_time}</span><br>` : ""}${js.map(chip).join("")}</td>`;
+}
+
+function hourCell(r, bks, jobs, d, h) {
+  const s = `${d}T${String(h).padStart(2, "0")}:00`, e = `${d}T${String(h).padStart(2, "0")}:59`;
+  const b = bks.find(b => `${b.checkin_date}T${b.checkin_time}` <= e && `${b.checkout_date}T${b.checkout_time}` > s);
+  const js = (jobs[r.id + "|" + d] || []).filter(j => parseInt(j.checkout_time) === h);
+  return `<td class="${b ? "occ" : ""}" ${b ? `data-b="${b.id}"` : ""}>${js.map(chip).join("")}</td>`;
+}
+
+// ---------- events ----------
+document.addEventListener("click", async e => {
+  const t = e.target;
+  if (t.dataset.open) {
+    const dlg = $("#" + t.dataset.open);
+    if (t.dataset.open === "dBooking") {
+      const f = $("form", dlg);
+      if (!f.property_id.options.length) return toast("Πρόσθεσε πρώτα δωμάτιο", true);
+      f.checkin_date.value ||= $("#start").value;
+    }
+    dlg.showModal();
+  }
+  if ("close" in t.dataset) t.closest("dialog").close();
+  if (t.dataset.delHotel && confirm(`Διαγραφή του «${t.dataset.delHotel}» με όλα τα δωμάτια, τις κρατήσεις και τους καθαρισμούς του;`)) {
+    await api("/api/hotels?name=" + encodeURIComponent(t.dataset.delHotel), {method: "DELETE"}).catch(err => toast(err.message, true)); load();
+  }
+  if (t.dataset.delCleaner && confirm("Αφαίρεση καθαρίστριας;")) { await api("/api/cleaners/" + t.dataset.delCleaner, {method: "DELETE"}); load(); }
+  const b = t.closest("[data-b]");
+  if (b) showBooking(+b.dataset.b);
+});
+
+function focusHotel(h) {
+  const tr = [...document.querySelectorAll("tr.hotel")].find(x => x.dataset.hotel === h);
+  if (!tr) return;
+  tr.scrollIntoView({block: "center", behavior: "smooth"});
+  tr.classList.add("flash");
+}
+
+function showBooking(id) {
+  const b = S.bookings.find(x => x.id === id), r = S.rooms.find(x => x.id === b.property_id);
+  $("#dtTitle").textContent = `${r.hotel || r.name}${r.room ? " · " + r.room : ""}`;
+  $("#dtBody").innerHTML = `<p><b>${esc(b.guest_name || "—")}</b>${b.guests ? ` · ${b.guests} άτομα` : ""}<br>
+    ${esc(b.checkin_date)} ${esc(b.checkin_time)} → ${esc(b.checkout_date)} ${esc(b.checkout_time)}<br>
+    <span style="color:var(--mute)">${esc(b.code)} · ${esc(b.source || "")}${b.notes ? " · " + esc(b.notes) : ""}</span></p>`;
+  $("#dtDel").onclick = async () => {
+    if (!confirm("Διαγραφή κράτησης;")) return;
+    await api("/api/bookings/" + id, {method: "DELETE"}).catch(err => toast(err.message, true));
+    $("#dDetail").close(); load();
+  };
+  $("#dDetail").showModal();
+}
+
+document.addEventListener("submit", async e => {
+  const f = e.target; if (!f.dataset.api) return;
+  e.preventDefault(); // keep the dialog open until the API answers
+  if (f.dataset.api === "/api/import" && !f.hotel.value) { $(".ferr", f).textContent = "Πρόσθεσε πρώτα ένα ξενοδοχείο (+ Ξενοδοχείο)."; return; }
+  const btn = e.submitter, err$ = $(".ferr", f); btn.disabled = true; err$.textContent = "";
+  try {
+    let opts;
+    if ("multipart" in f.dataset) opts = {method: "POST", body: new FormData(f)};
+    else {
+      const o = Object.fromEntries(new FormData(f));
+      if (o.guests === "") delete o.guests; else if (o.guests) o.guests = +o.guests;
+      opts = {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(o)};
+    }
+    const res = await api(f.dataset.api, opts);
+    toast(res.bookings != null ? `Εισήχθησαν ${res.bookings} κρατήσεις` + (res.skipped ? ` · ${res.skipped} παραλείφθηκαν (υπάρχουν ήδη)` : "") : "Αποθηκεύτηκε");
+    if (res.first_date) $("#start").value = res.first_date; // show the imported period, not today
+    const hotel = f.dataset.api === "/api/rooms" ? f.hotel.value.trim() : null;
+    f.reset(); f.closest("dialog").close(); await load();
+    if (hotel) focusHotel(hotel);
+  } catch (err) { err$.textContent = err.message; }
+  finally { btn.disabled = false; }
+});
+
+function fillSelects() {
+  const hotels = [...new Set(S.rooms.map(r => r.hotel).filter(Boolean))];
+  $("#hotels").innerHTML = hotels.map(h => `<option value="${esc(h)}">`).join("");
+  $("#dImport select").innerHTML = hotels.map(h => `<option>${esc(h)}</option>`).join("");
+  const groups = {};
+  S.rooms.forEach(r => (groups[r.hotel || r.name] ||= []).push(r));
+  $("#dBooking select").innerHTML = Object.entries(groups).map(([h, rs]) =>
+    `<optgroup label="${esc(h)}">${rs.map(r => `<option value="${esc(r.id)}">${esc(r.room ? "Δωμάτιο " + r.room : r.name)}</option>`).join("")}</optgroup>`).join("");
+}
+
+$("#view").onchange = render;
+$("#start").onchange = render;
+$("#prev").onclick = () => { $("#start").value = addDays($("#start").value, $("#view").value === "day" ? -7 : -1); render(); };
+$("#next").onclick = () => { $("#start").value = addDays($("#start").value, $("#view").value === "day" ? 7 : 1); render(); };
+$("#todayBtn").onclick = () => { $("#start").value = S.today; render(); };
+
+load().catch(err => toast(err.message, true));
+setInterval(() => !document.querySelector("dialog[open]") && load().catch(() => {}), 30000);
+</script>
+</body>
+</html>
