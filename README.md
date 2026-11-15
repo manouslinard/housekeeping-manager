@@ -123,7 +123,7 @@ pytest                            # 73 tests, no network
 
 Without credentials the app runs in **dry-run**: messages are printed in the server log, nothing is sent.
 
-## Demo script (3 minutes)
+## Short function description
 
 1. Open the board: rooms × days, 🧹 checkout and ✨ mid-stay cleanings, orange chips = waiting for an answer.
 2. **🔗 Telegram** on a cleaner → send the link (email or QR) → she taps Start → her offers arrive.
