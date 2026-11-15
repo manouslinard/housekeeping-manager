@@ -77,3 +77,9 @@ def test_viber_webhook_signature_and_message():
         r = c.post("/webhooks/viber", content=body, headers={"X-Viber-Content-Signature": sig})
         assert r.status_code == 200
         assert c.get("/jobs", headers={"X-Admin-Token": "adm"}).json()[0]["status"] == "assigned"
+
+
+def test_job_html_page_is_served():
+    with make_client(Env()) as c:
+        r = c.get("/job/7")
+    assert r.status_code == 200 and "#7" in r.text and "<html" in r.text

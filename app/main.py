@@ -22,6 +22,7 @@ from .db import connect
 from .llm import make_llm
 from .messaging import Messenger
 from .telegram import parse_update, poll_forever, set_webhook
+from .view import router as web_router
 
 log = logging.getLogger("cleaner-agent")
 
@@ -91,6 +92,7 @@ def create_app(settings: Settings | None = None, agent: Agent | None = None, bac
             raise HTTPException(401, "Bad admin token")
 
     app.include_router(make_router(admin))
+    app.include_router(web_router)  # /job/{id}: HTML page for a cleaning job
 
     @app.get("/", include_in_schema=False)
     async def ui():
@@ -188,6 +190,5 @@ def create_app(settings: Settings | None = None, agent: Agent | None = None, bac
 
     return app
 
-app = create_app()
 
-app.include_router(web_router)
+app = create_app()
