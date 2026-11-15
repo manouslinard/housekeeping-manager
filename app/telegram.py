@@ -65,6 +65,16 @@ async def _safe_handle(agent, msg: dict) -> None:
         log.exception("failed to handle Telegram message")
 
 
+async def bot_username(token: str) -> str:
+    """The bot's @username (needed for t.me links), from the Bot API getMe call. "" on failure."""
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(f"https://api.telegram.org/bot{token}/getMe")
+        return r.json().get("result", {}).get("username", "")
+    except (httpx.HTTPError, ValueError):
+        return ""
+
+
 async def set_webhook(token: str, url: str, secret: str) -> None:
     """Register POST <url> with Telegram (call once on startup when a webhook secret is configured)."""
     try:

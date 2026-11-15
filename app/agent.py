@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import re
+import secrets
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -390,6 +391,8 @@ class Agent:
 
     async def _inbound(self, channel: str, sender: str, text: str) -> None:
         cc = self.s.default_country_code
+        if channel == "telegram" and await self._link_by_token(sender, text):
+            return
         if channel in ("viber", "telegram"):
             col = f"{channel}_id"
             cleaner = self.q1(f"SELECT * FROM cleaners WHERE {col}=? AND active=1", (sender,))
@@ -411,6 +414,47 @@ class Agent:
         else:
             await self._free_text(cleaner, text)
 
+    def telegram_link_token(self, cleaner_id: int) -> str | None:
+        """The cleaner's current single-use code for t.me/<bot>?start=<code> (created if missing)."""
+        row = self.q1("SELECT link_token FROM cleaners WHERE id=? AND active=1", (cleaner_id,))
+        if row is None:
+            return None
+        if row["link_token"]:
+            return row["link_token"]
+        code = secrets.token_urlsafe(9)  # 12 chars, only [A-Za-z0-9_-]: allowed in Telegram start parameters
+        self.x("UPDATE cleaners SET link_token=? WHERE id=?", (code, cleaner_id))
+        return code
+
+    async def _link_by_token(self, chat_id: str, text: str) -> bool:
+        """She tapped her personal link: Telegram sends "/start <code>". True if this message was a link attempt."""
+        m = re.fullmatch(r"/start\s+([A-Za-z0-9_-]{6,64})", (text or "").strip())
+        if not m:
+            return False
+        cleaner = self.q1("SELECT * FROM cleaners WHERE link_token=? AND active=1", (m[1],))
+        if cleaner is None:  # used already, or an old link: fall back to asking for the phone number
+            try:
+                await self.messenger.send(Recipient("", "telegram", telegram_id=chat_id), t("el", "link_expired"))
+            except SendError as exc:
+                log.error("telegram prompt failed: %s", exc)
+            return True
+        self.x("UPDATE cleaners SET link_token=NULL WHERE id=?", (cleaner["id"],))  # single use: a forwarded link is dead
+        await self._linked("telegram", chat_id, cleaner)
+        return True
+
+    async def _linked(self, channel: str, chat_id: str, cleaner) -> None:
+        """Save the chat id, say hello, and give open jobs another round so her offers arrive right away."""
+        self.x(f"UPDATE cleaners SET {channel}_id=NULL WHERE {channel}_id=?", (chat_id,))
+        self.x(f"UPDATE cleaners SET {channel}_id=? WHERE id=?", (chat_id, cleaner["id"]))
+        log.info("linked %s chat to cleaner %s", channel, cleaner["name"])
+        rcpt = Recipient("", channel, chat_id) if channel == "viber" else Recipient("", channel, telegram_id=chat_id)
+        try:
+            await self.messenger.send(rcpt, t(cleaner["language"], "linked", name=cleaner["name"]))
+        except SendError as exc:
+            log.error("%s link reply failed: %s", channel, exc)
+        self.x("UPDATE offers SET status='retired' WHERE cleaner_id=? AND status='failed'", (cleaner["id"],))
+        self.x("UPDATE jobs SET status='pending', updated_at=? WHERE status='unfilled'", (iso(self.now()),))
+        await self._advance()
+
     async def _link_chat(self, channel: str, chat_id: str, text: str) -> None:
         """Viber/Telegram users are identified by an opaque id; match it to a cleaner via their phone number."""
         rcpt = Recipient("", channel, chat_id) if channel == "viber" else Recipient("", channel, telegram_id=chat_id)
@@ -418,15 +462,7 @@ class Agent:
             phone = normalize_phone(text, self.s.default_country_code)
             cleaner = self.q1("SELECT * FROM cleaners WHERE phone=? AND active=1", (phone,))
             if cleaner is not None:
-                self.x(f"UPDATE cleaners SET {channel}_id=NULL WHERE {channel}_id=?", (chat_id,))
-                self.x(f"UPDATE cleaners SET {channel}_id=? WHERE id=?", (chat_id, cleaner["id"]))
-                try:
-                    await self.messenger.send(rcpt, t(cleaner["language"], "linked", name=cleaner["name"]))
-                except SendError as exc:
-                    log.error("%s link reply failed: %s", channel, exc)
-                self.x("UPDATE offers SET status='retired' WHERE cleaner_id=? AND status='failed'", (cleaner["id"],))
-                self.x("UPDATE jobs SET status='pending', updated_at=? WHERE status='unfilled'", (iso(self.now()),))
-                await self._advance()
+                await self._linked(channel, chat_id, cleaner)
                 return
         try:
             await self.messenger.send(rcpt, t("en", "link_prompt"))

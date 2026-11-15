@@ -257,3 +257,39 @@ def test_linking_retries_unfilled_jobs():
     run(e.agent.handle_inbound("telegram", "tg-new", "6900000001"))
     assert e.agent.list_jobs()[0]["status"] == "offering" and offered_to(e) == ["Maria"]
     assert any("YES 1" in b for b in e.messenger.to("tg-new"))
+
+
+# ---- one-tap link: t.me/<bot>?start=<code> ---------------------------------
+def test_one_tap_link_links_the_chat_and_is_single_use():
+    e = telegram_env()
+    e.db.execute("UPDATE cleaners SET telegram_id=NULL")
+    code = e.agent.telegram_link_token(1)
+    assert code == e.agent.telegram_link_token(1)  # stable until used
+    run(e.agent.handle_inbound("telegram", "tg-phone", f"/start {code}"))
+    assert e.db.execute("SELECT telegram_id FROM cleaners WHERE id=1").fetchone()[0] == "tg-phone"
+    assert "linked" in e.messenger.to("tg-phone")[0]
+    run(e.agent.handle_inbound("telegram", "tg-stranger", f"/start {code}"))  # forwarded link: dead now
+    assert e.db.execute("SELECT telegram_id FROM cleaners WHERE id=1").fetchone()[0] == "tg-phone"
+    assert "already used" in e.messenger.to("tg-stranger")[0] or "χρησιμοποιηθεί" in e.messenger.to("tg-stranger")[0]
+    assert e.agent.telegram_link_token(1) != code  # a fresh one is made on demand
+
+
+def test_one_tap_link_moves_cleaner_to_a_new_phone_and_sends_offers():
+    e = telegram_env()
+    e.settings.dry_run, e.settings.telegram_bot_token = False, "tok"
+    feed_with_checkout(e)
+    e.db.execute("UPDATE cleaners SET telegram_id=NULL")
+    run(e.agent.sync_calendars())
+    assert e.agent.list_jobs()[0]["status"] == "unfilled"
+    run(e.agent.handle_inbound("telegram", "tg-new", f"/start {e.agent.telegram_link_token(1)}"))
+    assert any("YES 1" in b for b in e.messenger.to("tg-new"))
+
+
+def test_telegram_link_endpoint():
+    e = telegram_env()
+    with make_client(e, telegram_bot_token="tok", telegram_bot_username="Test_bot") as c:
+        r = c.get("/api/cleaners/1/telegram-link").json()
+        assert r["url"].startswith("https://t.me/Test_bot?start=") and r["linked"] is True and r["name"] == "Maria"
+        assert c.get("/api/cleaners/999/telegram-link").status_code == 404
+    with make_client(Env(), telegram_bot_token="") as c:
+        assert c.get("/api/cleaners/1/telegram-link").status_code == 422

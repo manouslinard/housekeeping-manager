@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS cleaners (
     language TEXT NOT NULL DEFAULT 'en',        -- en | el
     viber_id TEXT,
     telegram_id TEXT,
+    link_token TEXT,                             -- single-use code in the t.me/<bot>?start=<code> link
     active INTEGER NOT NULL DEFAULT 1,
     max_jobs_per_day INTEGER NOT NULL DEFAULT 3
 );
@@ -111,8 +112,10 @@ def connect(path: str) -> sqlite3.Connection:
     for col in ("hotel", "room"):  # upgrade databases created before the UI existed
         if col not in have:
             conn.execute(f"ALTER TABLE properties ADD COLUMN {col} TEXT")
-    if "telegram_id" not in {r[1] for r in conn.execute("PRAGMA table_info(cleaners)")}:
-        conn.execute("ALTER TABLE cleaners ADD COLUMN telegram_id TEXT")
+    cleaner_cols = {r[1] for r in conn.execute("PRAGMA table_info(cleaners)")}
+    for col in ("telegram_id", "link_token"):
+        if col not in cleaner_cols:
+            conn.execute(f"ALTER TABLE cleaners ADD COLUMN {col} TEXT")
     if "kind" not in {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}:
         conn.execute("ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'checkout'")
     return conn

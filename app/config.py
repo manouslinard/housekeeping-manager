@@ -65,6 +65,7 @@ class Settings:
     verify_webhooks: bool = True
     admin_token: str = ""
     telegram_bot_token: str = ""
+    telegram_bot_username: str = ""   # e.g. Kerkyra_bot; looked up with getMe when empty
     telegram_webhook_secret: str = ""  # set => Telegram calls POST /webhooks/telegram; empty => the app long-polls instead
     gemini_api_key: str = ""
     gemini_model: str = "gemini-flash-latest"
@@ -111,6 +112,7 @@ class Settings:
             verify_webhooks=_b("VERIFY_WEBHOOKS", True),
             admin_token=_s("ADMIN_TOKEN"),
             telegram_bot_token=telegram_token,
+            telegram_bot_username=_s("TELEGRAM_BOT_USERNAME").lstrip("@"),
             telegram_webhook_secret=_s("TELEGRAM_WEBHOOK_SECRET"),
             gemini_api_key=_s("GEMINI_API_KEY"),
             gemini_model=_s("GEMINI_MODEL", "gemini-flash-latest"),

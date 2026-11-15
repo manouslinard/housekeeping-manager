@@ -162,6 +162,25 @@ def make_router(admin) -> APIRouter:
         )
         return {"ok": True}
 
+    @r.get("/cleaners/{cid}/telegram-link")
+    async def telegram_link(cid: int, request: Request):
+        """One-tap link for a cleaner: t.me/<bot>?start=<single-use code>. She taps it, presses Start, done."""
+        a = ag(request)
+        if not a.s.telegram_bot_token:
+            raise HTTPException(422, "Δεν έχει οριστεί TELEGRAM_BOT_TOKEN στο .env")
+        if not a.s.telegram_bot_username:
+            from .telegram import bot_username
+
+            a.s.telegram_bot_username = await bot_username(a.s.telegram_bot_token)
+            if not a.s.telegram_bot_username:
+                raise HTTPException(502, "Δεν βρέθηκε το όνομα του bot (getMe). Όρισε TELEGRAM_BOT_USERNAME στο .env")
+        code = a.telegram_link_token(cid)
+        if code is None:
+            raise HTTPException(404, "Άγνωστη καθαρίστρια")
+        c = a.q1("SELECT name, telegram_id FROM cleaners WHERE id=?", (cid,))
+        return {"url": f"https://t.me/{a.s.telegram_bot_username}?start={code}", "name": c["name"],
+                "linked": c["telegram_id"] is not None}
+
     @r.delete("/cleaners/{cid}")
     async def del_cleaner(cid: int, request: Request):
         ag(request).x("UPDATE cleaners SET active=0 WHERE id=?", (cid,))  # soft: jobs/offers keep their history
