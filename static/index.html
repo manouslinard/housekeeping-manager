@@ -84,20 +84,19 @@ label input,label select{margin-top:3px;color:var(--ink)}
   <span class="sp"></span>
   <button data-open="dBooking">+ Κράτηση</button>
   <button data-open="dImport">⇪ Excel</button>
-  <button class="pri" data-open="dCleaner">+ Καθαρίστρια</button>
+  <button class="pri" data-open="dCleaner">+ Μέλος ομάδας</button>
   <button class="pri" data-open="dRoom">+ Ξενοδοχείο</button>
 </header>
 <main>
   <section><div class="card"><div class="scroll" id="grid"></div><div class="legend" id="legend"></div></div></section>
-  <section><h2>Καθαρίστριες <small id="ccount"></small></h2><div class="cleaners" id="people"></div></section>
+  <section><h2>Ομάδα Καθαρισμού <small id="ccount"></small></h2><div class="cleaners" id="people"></div></section>
 </main>
 
 <dialog id="dCleaner"><form method="dialog" data-api="/api/cleaners">
-  <h3>Νέα καθαρίστρια</h3>
+  <h3>Νέο μέλος ομάδας καθαρισμού</h3>
   <label>Όνομα<input name="name" required></label>
   <label>Τηλέφωνο<input name="phone" required placeholder="+30 690 000 0000"></label>
   <label>Email (εκεί στέλνεται ο σύνδεσμος Telegram)<input name="email" type="email" placeholder="name@gmail.com"></label>
-  <label>Κανάλι<select name="channel"><option value="telegram">Telegram</option><option value="sms">SMS</option><option value="viber">Viber</option></select></label>
   <label>Διεύθυνση<input name="address" required placeholder="Οδός, αριθμός, πόλη"></label>
   <p class="ferr"></p>
   <div class="actions"><button type="button" data-close>Άκυρο</button><button class="pri">Προσθήκη</button></div>
@@ -146,7 +145,7 @@ label input,label select{margin-top:3px;color:var(--ink)}
 </form></dialog>
 
 <dialog id="dTg"><h3>Σύνδεση Telegram · <span id="tgName"></span></h3>
-  <p class="meta" style="margin-top:0">Στείλε αυτόν τον σύνδεσμο στην καθαρίστρια (Viber, WhatsApp, SMS) ή δείξε της το QR.
+  <p class="meta" style="margin-top:0">Στείλε αυτόν τον σύνδεσμο στο μέλος της ομάδας (email, Viber, WhatsApp) ή δείξε του το QR.
   Το πατάει, ανοίγει το Telegram, πατάει <b>Start</b> και συνδέεται. Ισχύει μία φορά.</p>
   <div id="tgQr" style="display:grid;place-items:center;margin:12px 0"></div>
   <input id="tgUrl" readonly onclick="this.select()">
@@ -199,7 +198,7 @@ const COLORS = ["#6366f1","#ec4899","#10b981","#f59e0b","#0ea5e9","#8b5cf6","#ef
 const fmtD = d => `${DAYS[dow(d)]} ${d.slice(8)}/${d.slice(5, 7)}`;
 function renderCleaners() {
   $("#ccount").textContent = S.cleaners.length ? `(${S.cleaners.length})` : "";
-  if (!S.cleaners.length) { $("#people").innerHTML = `<div class="none">Δεν υπάρχουν καθαρίστριες ακόμη (+ Καθαρίστρια).</div>`; return; }
+  if (!S.cleaners.length) { $("#people").innerHTML = `<div class="none">Η ομάδα καθαρισμού είναι άδεια (+ Μέλος ομάδας).</div>`; return; }
   const room = id => { const r = S.rooms.find(x => x.id === id); return r ? (r.room ? "Δωμ. " + r.room : r.name) : id; };
   $("#people").innerHTML = S.cleaners.map((c, i) => {
     const mine = S.jobs.filter(j => j.cleaner_id === c.id && j.checkout_date >= S.today).sort((a, b) => a.checkout_date.localeCompare(b.checkout_date));
@@ -207,10 +206,10 @@ function renderCleaners() {
     const ini = c.name.split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase();
     return `<div class="card cl"><div class="top"><div class="av" style="background:${COLORS[i % COLORS.length]}">${esc(ini)}</div>
       <div><b>${esc(c.name)}</b><span class="meta">${esc(c.phone)}</span></div>
-      ${c.channel === "telegram" ? `<button class="x tg" data-tg-link="${c.id}" title="Σύνδεσμος σύνδεσης Telegram">🔗 Telegram</button>` : ""}
+      <button class="x tg" data-tg-link="${c.id}" title="Σύνδεσμος σύνδεσης Telegram">🔗 Telegram</button>
       <button class="x" data-del-cleaner="${c.id}" title="Αφαίρεση">✕</button></div>
       <div class="meta" style="margin-top:8px">📍 ${esc(c.address || "—")}${c.email ? `<br>✉ ${esc(c.email)}` : ""}</div>
-      <div style="margin-top:6px"><span class="tag">${esc(c.channel)}${c.channel === "telegram" && !c.linked ? " ⚠ δεν έχει συνδεθεί" : ""}</span><span class="tag">έως ${c.max_jobs_per_day}/ημέρα</span><span class="tag">${mine.length} αναθέσεις</span>${asked.length ? `<span class="tag" style="color:var(--offering)">${asked.length} σε εκκρεμότητα</span>` : ""}</div>
+      <div style="margin-top:6px"><span class="tag">✈ Telegram${c.linked ? " ✓" : " ⚠ δεν έχει συνδεθεί"}</span><span class="tag">έως ${c.max_jobs_per_day}/ημέρα</span><span class="tag">${mine.length} αναθέσεις</span>${asked.length ? `<span class="tag" style="color:var(--offering)">${asked.length} σε εκκρεμότητα</span>` : ""}</div>
       ${asked.length ? `<div class="jobs">${asked.slice(0, 3).map(j => `<div><span>${fmtD(j.checkout_date)}</span><span>${esc(room(j.property_id))}</span><span class="meta">${j.queued ? "⏳ στην ουρά" : "ζητήθηκε"} · ${j.offered_km.toFixed(1)} χλμ</span></div>`).join("")}</div>` : ""}
       ${mine.length ? `<div class="jobs">${mine.slice(0, 5).map(j => `<div><span>${fmtD(j.checkout_date)}</span><span>${esc(room(j.property_id))}</span><span class="meta">${esc(j.checkout_time)}</span></div>`).join("")}${mine.length > 5 ? `<div class="meta">+${mine.length - 5} ακόμη</div>` : ""}</div>`
       : `<div class="none">Καμία ανάθεση ακόμη</div>`}</div>`;
@@ -292,7 +291,7 @@ document.addEventListener("click", async e => {
     await api("/api/hotels?name=" + encodeURIComponent(t.dataset.delHotel), {method: "DELETE"}).catch(err => toast(err.message, true)); load();
   }
   if (t.dataset.tgLink) showTgLink(+t.dataset.tgLink);
-  if (t.dataset.delCleaner && confirm("Αφαίρεση καθαρίστριας;")) { await api("/api/cleaners/" + t.dataset.delCleaner, {method: "DELETE"}); load(); }
+  if (t.dataset.delCleaner && confirm("Αφαίρεση από την ομάδα καθαρισμού;")) { await api("/api/cleaners/" + t.dataset.delCleaner, {method: "DELETE"}); load(); }
   const b = t.closest("[data-b]");
   if (b) showBooking(+b.dataset.b);
 });

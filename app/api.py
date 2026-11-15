@@ -20,7 +20,7 @@ class CleanerIn(BaseModel):
     name: str
     phone: str
     address: str
-    channel: str = "sms"          # sms | viber | telegram
+    channel: str = "telegram"     # ignored: Telegram is the only channel for now
     email: str = ""               # the one-tap Telegram link is emailed here
 
 
@@ -166,11 +166,11 @@ def make_router(admin) -> APIRouter:
             """INSERT INTO cleaners(name, phone, lat, lon, address, channel, email, active, max_jobs_per_day) VALUES (?,?,?,?,?,?,NULLIF(?,''),1,?)
                ON CONFLICT(phone) DO UPDATE SET name=excluded.name, lat=excluded.lat, lon=excluded.lon,
                  address=excluded.address, channel=excluded.channel, email=excluded.email, active=1""",
-            (body.name.strip(), phone, *pos, body.address, body.channel if body.channel in ("sms", "viber", "telegram") else "sms",
+            (body.name.strip(), phone, *pos, body.address, "telegram",
              email, a.s.default_max_jobs_per_day),
         )
         out = {"ok": True}
-        if body.channel == "telegram" and email and a.mailer.configured and a.s.telegram_bot_token:
+        if email and a.mailer.configured and a.s.telegram_bot_token:
             cid = a.q1("SELECT id FROM cleaners WHERE phone=?", (phone,))["id"]  # new Telegram cleaner: email her the link now
             try:
                 await email_link(a, cid)
@@ -191,7 +191,7 @@ def make_router(admin) -> APIRouter:
                 raise HTTPException(502, "Δεν βρέθηκε το όνομα του bot (getMe). Όρισε TELEGRAM_BOT_USERNAME στο .env")
         code = a.telegram_link_token(cid)
         if code is None:
-            raise HTTPException(404, "Άγνωστη καθαρίστρια")
+            raise HTTPException(404, "Άγνωστο μέλος ομάδας")
         c = a.q1("SELECT name, telegram_id, email, language FROM cleaners WHERE id=?", (cid,))
         return {"url": f"https://t.me/{a.s.telegram_bot_username}?start={code}", "name": c["name"],
                 "linked": c["telegram_id"] is not None, "email": c["email"] or "", "language": c["language"],
@@ -200,7 +200,7 @@ def make_router(admin) -> APIRouter:
     async def email_link(a, cid: int) -> str:
         info = await link_for(a, cid)
         if not info["email"]:
-            raise HTTPException(422, "Η καθαρίστρια δεν έχει email")
+            raise HTTPException(422, "Το μέλος της ομάδας δεν έχει email")
         if not a.mailer.configured:
             raise HTTPException(422, "Δεν έχει ρυθμιστεί το email: συμπλήρωσε SMTP_USER και SMTP_PASSWORD στο .env")
         lang, name, url = info["language"], info["name"].split()[0], info["url"]

@@ -74,7 +74,7 @@ Telegram bots can't message a phone number, so each cleaner must press **Start**
               │      │   └── cleaner_schedules.xlsx (rebuilt from the DB, read by Gemini)
               │      └────── Gemini (app/llm.py): read replies, choose replacement
               ▼
-        Messenger (app/messaging.py) ──► Telegram Bot API   (also SMS / Viber)
+        Messenger (app/messaging.py) ──► Telegram Bot API
               ▲
  Telegram ────┘  long polling (no public URL) or POST /webhooks/telegram (secret token)
 ```
@@ -84,7 +84,7 @@ Telegram bots can't message a phone number, so each cleaner must press **Start**
 | `app/agent.py` | the scheduling brain: jobs, offers, replies, re-planning |
 | `app/llm.py` | Gemini client (structured JSON output) |
 | `app/telegram.py` | receive messages (polling / webhook), bot username |
-| `app/messaging.py` | send via Telegram, SMS (Twilio), Viber; dry-run mode |
+| `app/messaging.py` | send via Telegram; dry-run mode. SMS (Twilio) and Viber code exists but is switched off: Telegram is the only channel offered |
 | `app/schedule_xlsx.py` | per-cleaner programme as Excel |
 | `app/mailer.py` | email (Gmail SMTP) for the one-tap link |
 | `app/api.py`, `static/index.html` | web UI and its API |
@@ -141,7 +141,8 @@ Without credentials the app runs in **dry-run**: messages are printed in the ser
 - Offers are sent to one cleaner at a time (30 min each) to keep the work fair; a "send to several at once" mode would be faster.
 - "Only after 14:00" is treated as a decline of that job, not as a time constraint to renegotiate.
 - `/job/{id}` is a prototype page with fixed text; next step: fill it from the database and link it from the Telegram offer.
-- The web UI is in Greek.
+- Telegram is the only channel for now (SMS / Viber are disabled in the UI to keep things simple).
+- The web UI is in Greek; the cleaners are called the **Ομάδα Καθαρισμού** (cleaning team).
 
 ## Tests
 
