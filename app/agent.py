@@ -521,10 +521,39 @@ class Agent:
                 await self._answer_offer(cleaner, "no", job_id)
         elif intent == "done":
             await self._mark_done(cleaner, job_id)
+        elif intent == "status":
+            await self._send_overview(cleaner)
         elif intent == "unavailable" and await self._set_unavailable(cleaner, r, reply):
             pass
         else:
             await self._safe_send(cleaner, reply or t(lang, "unknown"))
+
+    async def _send_overview(self, cleaner) -> None:
+        """She asked for her offers / programme: re-send every open offer, then list the jobs she already holds."""
+        lang = cleaner["language"]
+        offers = self.q(
+            """SELECT j.*, o.distance_km FROM offers o JOIN jobs j ON j.id=o.job_id
+               WHERE o.cleaner_id=? AND o.status='pending' ORDER BY j.checkout_date, j.checkout_time""",
+            (cleaner["id"],),
+        )
+        for j in offers:
+            prop = self.q1("SELECT * FROM properties WHERE id=?", (j["property_id"],))
+            await self._safe_send(
+                cleaner, t(lang, "offer", name=cleaner["name"], km=f"{j['distance_km'] or 0:.1f}", **self._job_vars(j, prop, lang)), j["id"]
+            )
+        mine = self.q(
+            "SELECT * FROM jobs WHERE cleaner_id=? AND status='assigned' AND checkout_date>=? ORDER BY checkout_date, checkout_time",
+            (cleaner["id"], self.now().date().isoformat()),
+        )
+        lines = []
+        for j in mine:
+            prop = self.q1("SELECT * FROM properties WHERE id=?", (j["property_id"],))
+            v = self._job_vars(j, prop, lang)
+            lines.append(f"#{v['id']} {v['date']} {v['time']} · {v['property']}")
+        if lines:
+            await self._safe_send(cleaner, t(lang, "overview_jobs") + "\n" + "\n".join(lines))
+        if not offers and not lines:
+            await self._safe_send(cleaner, t(lang, "overview_none"))
 
     def _release(self, cleaner_id: int, job) -> None:
         """Take a job away from a cleaner (offer or accepted) so it goes back to the pool."""

@@ -350,3 +350,22 @@ def test_csv_email_column_is_loaded(tmp_path):
     e = Env()
     run(load_cleaners(e.db, str(f), e.settings))
     assert e.db.execute("SELECT email FROM cleaners WHERE name='Anna'").fetchone()[0] == "anna@example.com"
+
+
+def test_ask_for_offers_resends_them_and_lists_confirmed_jobs():
+    e = telegram_env(FakeLLM(reply={"intent": "status", "reply_text": "I'm sending them right away"}))
+    feed_with_checkout(e)
+    run(e.agent.sync_calendars())
+    n = len(e.messenger.to("tg-maria"))
+    run(e.agent.handle_inbound("telegram", "tg-maria", "send me the offers please"))
+    sent = e.messenger.to("tg-maria")[n:]
+    assert len(sent) == 1 and "YES 1" in sent[0]  # the real offer again, not Gemini's promise
+    run(e.agent.handle_inbound("telegram", "tg-maria", "yes"))
+    run(e.agent.handle_inbound("telegram", "tg-maria", "what is my programme?"))
+    assert any("#1" in b and "Plaka Studio" in b for b in e.messenger.to("tg-maria")[-1:])
+
+
+def test_status_with_nothing_open_says_so():
+    e = telegram_env(FakeLLM(reply={"intent": "status"}))
+    run(e.agent.handle_inbound("telegram", "tg-maria", "show my jobs"))
+    assert "no open offers" in e.messenger.to("tg-maria")[-1]

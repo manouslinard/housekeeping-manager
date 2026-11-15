@@ -24,7 +24,7 @@ class LLMError(Exception):
 REPLY_SCHEMA = {
     "type": "OBJECT",
     "properties": {
-        "intent": {"type": "STRING", "enum": ["yes", "no", "done", "unavailable", "other"]},
+        "intent": {"type": "STRING", "enum": ["yes", "no", "done", "unavailable", "status", "other"]},
         "job_id": {"type": "INTEGER", "nullable": True},
         "unavailable_from": {"type": "STRING", "nullable": True},
         "unavailable_to": {"type": "STRING", "nullable": True},
@@ -47,12 +47,16 @@ intent:
 - "no": she declines a job, or cannot do it at the proposed time (e.g. "only after 14:00" when the job starts earlier).
 - "done": she says she finished cleaning.
 - "unavailable": she is sick, away or has an emergency and cannot work for some days (all her jobs in that period must move).
+- "status": she asks to see / send / repeat her offers, jobs or schedule ("send me the offers", "τι δουλειές έχω;", "πες μου το πρόγραμμα").
+  The system then sends her the real list itself.
 - "other": anything else (question, thanks, small talk).
 job_id: the id of the job she means. Use ONLY ids listed in open_offers or upcoming_jobs; null if unclear.
 unavailable_from / unavailable_to: for "unavailable" only, YYYY-MM-DD, inclusive. Resolve "today", "until Friday",
 "this week" from today's date in the context. If she gives no end, use the same day as the start. null otherwise.
 reply_text: one short, friendly sentence to her in HER language (context.cleaner.language: en or el). For "no" or
-"unavailable" tell her it is fine and we will arrange it. Never promise anything else. Never invent job details."""
+"unavailable" tell her it is fine and we will arrange it. Never promise anything else. Never invent job details.
+IMPORTANT: you cannot send, change or arrange anything yourself. For "other" never say you will send or check something;
+only answer briefly, or tell her she can write "offers" / "πρόγραμμα" to see her jobs."""
 
 CHOOSE_SYSTEM = """You assign a cleaning job to ONE cleaner. Pick the best candidate (JSON context follows).
 Rules: choose ONLY a cleaner_id that appears in candidates. Prefer a small distance (km), but also:
@@ -101,7 +105,7 @@ class GeminiClient:
         data = await self._generate(REPLY_SYSTEM, {"message": text, "context": context}, REPLY_SCHEMA)
         intent = data.get("intent")
         return {
-            "intent": intent if intent in ("yes", "no", "done", "unavailable", "other") else "other",
+            "intent": intent if intent in ("yes", "no", "done", "unavailable", "status", "other") else "other",
             "job_id": data.get("job_id"),
             "unavailable_from": data.get("unavailable_from"),
             "unavailable_to": data.get("unavailable_to"),
