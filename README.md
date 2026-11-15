@@ -1,6 +1,6 @@
 # Housekeeping Manager
 
-* [GenAI Hackathon](https://hackathon.polymath42.com/) Team: Kerkira Dimisianou, Foteini Sfakianaki, Vaggelis Farmakis, Manousos Linardakis
+* [GenAI Hackathon](https://hackathon.polymath42.com/) Team: Kerkyra Dimisianou, Foteini Sfakianaki, Vaggelis Farmakis, Manousos Linardakis
 
 * [Youtube Video Showcase](https://youtu.be/UHstZ5xnI7Y)
 
