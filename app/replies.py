@@ -19,7 +19,7 @@ def is_simple(text: str) -> bool:
     """A bare answer like "yes", "ΝΑΙ 12" or "no 7": at most 3 words and one number. Anything longer
     ("I can only do 4, no to the rest") has more to it than the first yes/no word."""
     tokens = re.findall(r"\d+|[^\W\d_]+", _norm(text or ""))
-    return len(tokens) <= 3 and sum(t.isdigit() for t in tokens) <= 1
+    return len(tokens) <= 3 and sum(t.isdigit() for t in tokens) <= 1 and not ({"ολα", "ολες", "ολους", "all", "everything"} & set(tokens))
 
 
 def parse_reply(text: str) -> tuple[str, int | None]:

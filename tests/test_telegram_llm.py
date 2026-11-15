@@ -426,3 +426,25 @@ def test_short_answers_never_call_gemini():
     run(e.agent.handle_inbound("telegram", "tg-maria", "όχι 1"))
     assert llm.reply_calls == []
     assert {j["id"]: j["status"] for j in e.agent.list_jobs()}[2] == "assigned"
+
+
+def test_can_do_everything_accepts_all_open_offers():
+    llm = FakeLLM(reply={"intent": "answers", "decisions": [], "accept_rest": True})
+    e = _two_jobs_for_maria(llm)
+    run(e.agent.handle_inbound("telegram", "tg-maria", "μπορώ για όλα"))
+    assert all(j["status"] == "assigned" and j["cleaner"] == "Maria" for j in e.agent.list_jobs())
+
+
+def test_everything_except_one():
+    llm = FakeLLM(reply={"intent": "answers", "decisions": [{"job_id": 1, "answer": "no"}], "accept_rest": True})
+    e = _two_jobs_for_maria(llm)
+    run(e.agent.handle_inbound("telegram", "tg-maria", "όλα εκτός από το 1"))
+    jobs_ = {j["id"]: j for j in e.agent.list_jobs()}
+    assert jobs_[2]["status"] == "assigned" and jobs_[1]["status"] == "offering" and jobs_[1]["offered_to"] != "Maria"
+
+
+def test_yes_to_all_is_read_by_gemini_not_ambiguous():
+    llm = FakeLLM(reply={"intent": "answers", "decisions": [], "accept_rest": True})
+    e = _two_jobs_for_maria(llm)
+    run(e.agent.handle_inbound("telegram", "tg-maria", "ναι για όλα"))
+    assert len(llm.reply_calls) == 1 and all(j["status"] == "assigned" for j in e.agent.list_jobs())

@@ -38,8 +38,9 @@ REPLY_SCHEMA = {
             },
         },
         "decline_rest": {"type": "BOOLEAN"},
+        "accept_rest": {"type": "BOOLEAN"},
     },
-    "required": ["intent", "job_id", "unavailable_from", "unavailable_to", "reply_text", "decisions", "decline_rest"],
+    "required": ["intent", "job_id", "unavailable_from", "unavailable_to", "reply_text", "decisions", "decline_rest", "accept_rest"],
 }
 
 CHOOSE_SCHEMA = {
@@ -71,7 +72,10 @@ open_offers. A number she writes ("την 6", "job 7", "#7") is the job_id if it
 room number (open_offers[].room), then use that room's job. A day or time ("την Τρίτη", "after 14:00 not possible")
 refers to all open offers on that date / time. [] when intent is not "answers".
 decline_rest: true when she refuses everything she did not name ("I can't do any, only 6", "μόνο η 6, οι άλλες όχι"),
-false when the unnamed offers should stay open. Never accept anything she did not clearly accept.
+false when the unnamed offers should stay open.
+accept_rest: true when she accepts everything she did not exclude: "μπορώ για όλα", "I can do all of them" (decisions [],
+accept_rest true), or "όλα εκτός από το 6" / "all except 6" (decisions [6 -> no], accept_rest true). Never true together with
+decline_rest. For "answers" with only "yes"/"no" to named offers, both stay false. Never accept anything she did not clearly accept.
 IMPORTANT: you cannot send, change or arrange anything yourself. For "other" never say you will send or check something;
 only answer briefly, or tell her she can write "offers" / "πρόγραμμα" to see her jobs."""
 
@@ -118,7 +122,7 @@ class GeminiClient:
 
     async def interpret_reply(self, text: str, context: dict) -> dict:
         """-> {"intent": yes|no|done|unavailable|other, "job_id": int|None, "unavailable_from": str|None,
-        "unavailable_to": str|None, "reply_text": str, "decisions": [{job_id, answer}], "decline_rest": bool}. Raises LLMError."""
+        "unavailable_to": str|None, "reply_text": str, "decisions": [{job_id, answer}], "decline_rest": bool, "accept_rest": bool}. Raises LLMError."""
         data = await self._generate(REPLY_SYSTEM, {"message": text, "context": context}, REPLY_SCHEMA)
         intent = data.get("intent")
         return {
@@ -129,6 +133,7 @@ class GeminiClient:
             "reply_text": str(data.get("reply_text") or "").strip(),
             "decisions": [d for d in (data.get("decisions") or []) if isinstance(d, dict)],
             "decline_rest": bool(data.get("decline_rest")),
+            "accept_rest": bool(data.get("accept_rest")) and not data.get("decline_rest"),
         }
 
     async def choose_cleaner(self, job: dict, candidates: list[dict], context: dict) -> int | None:

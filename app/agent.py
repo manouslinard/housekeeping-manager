@@ -517,8 +517,9 @@ class Agent:
         known = {o["job_id"] for o in ctx["open_offers"]} | {j["job_id"] for j in ctx["upcoming_jobs"]}
         job_id = r.get("job_id") if r.get("job_id") in known else None  # ids Gemini invented are ignored
         intent, reply = r.get("intent"), (r.get("reply_text") or "").strip()
-        if (r.get("decisions") or r.get("decline_rest")) and await self._apply_answers(
-            cleaner, r.get("decisions") or [], bool(r.get("decline_rest")), [o["job_id"] for o in ctx["open_offers"]]
+        if (r.get("decisions") or r.get("decline_rest") or r.get("accept_rest")) and await self._apply_answers(
+            cleaner, r.get("decisions") or [], bool(r.get("decline_rest")), [o["job_id"] for o in ctx["open_offers"]],
+            accept_rest=bool(r.get("accept_rest")),
         ):
             return
         if intent == "yes":
@@ -540,7 +541,7 @@ class Agent:
         else:
             await self._safe_send(cleaner, reply or t(lang, "unknown"))
 
-    async def _apply_answers(self, cleaner, decisions: list, decline_rest: bool, open_ids: list[int]) -> bool:
+    async def _apply_answers(self, cleaner, decisions: list, decline_rest: bool, open_ids: list[int], accept_rest: bool = False) -> bool:
         """One message answering several offers ("I can't do any, only 6"). Only her open offers can be touched.
         False if nothing usable came out of it (the caller then handles the message the normal way)."""
         yes, no = [], []
@@ -548,8 +549,11 @@ class Agent:
             jid, ans = d.get("job_id"), d.get("answer")
             if jid in open_ids and jid not in yes + no and ans in ("yes", "no"):
                 (yes if ans == "yes" else no).append(jid)
+        rest = [j for j in open_ids if j not in yes and j not in no]
         if decline_rest:
-            no += [j for j in open_ids if j not in yes and j not in no]
+            no += rest
+        elif accept_rest:
+            yes += rest
         if not yes and not no:
             return False
         for jid in yes:
