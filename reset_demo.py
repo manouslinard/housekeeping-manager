@@ -19,7 +19,8 @@ from app.config import Settings
 from app.db import connect
 from app.loaders import load_cleaners
 
-ROOMS = 6
+ROOMS = 3          # small demo: easy to follow the offers one by one
+DAYS = 10          # bookings are generated for the next 10 days
 HOTEL, ADDRESS, LAT, LON = "Hotel Aegean", "Adrianou 10, Plaka, Athens", 37.9715, 23.7300
 GUESTS = ["Daniel Ashworth", "Γιώργος Λαμπράκης", "Sophie Bennett", "Ελένη Μελισσάνου", "Julien Laurent", "Camille Chevalier",
           "Νικόλαος Καραγιάννης", "Hannah Whitfield", "Mathieu Cheval", "Δέσποινα Δρακάκη", "Thomas Collins", "Elena Marchetti",
@@ -30,7 +31,7 @@ def seed_bookings(db, today: date, rooms: int = ROOMS) -> int:
     rnd, n = random.Random(42), 0  # fixed seed: the same demo every time
     for room in range(1, rooms + 1):
         pid, day = f"{HOTEL.lower().replace(' ', '-')}-{room}", today - timedelta(days=rnd.randint(0, 2))
-        while day < today + timedelta(days=14):
+        while day < today + timedelta(days=DAYS):
             nights = rnd.randint(2, 7)
             out = day + timedelta(days=nights)
             db.execute(
@@ -71,7 +72,8 @@ def main() -> None:
             (f"{HOTEL.lower().replace(' ', '-')}-{room}", f"{HOTEL} – {room}", ADDRESS, LAT, LON, "11:00", HOTEL, str(room)),
         )
     n = seed_bookings(db, date.today())
-    print(f"loaded 9 cleaners, {ROOMS} rooms, {n} bookings")
+    ncl = db.execute("SELECT COUNT(*) FROM cleaners WHERE active=1").fetchone()[0]
+    print(f"loaded {ncl} cleaners, {ROOMS} rooms, {n} bookings")
 
     # ask a running server to turn the bookings into cleaning jobs now (otherwise it happens within SYNC_INTERVAL_MIN)
     port = os.environ.get("PORT", "8000")
