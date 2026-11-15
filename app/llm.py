@@ -24,13 +24,22 @@ class LLMError(Exception):
 REPLY_SCHEMA = {
     "type": "OBJECT",
     "properties": {
-        "intent": {"type": "STRING", "enum": ["yes", "no", "done", "unavailable", "status", "other"]},
+        "intent": {"type": "STRING", "enum": ["yes", "no", "done", "unavailable", "status", "answers", "other"]},
         "job_id": {"type": "INTEGER", "nullable": True},
         "unavailable_from": {"type": "STRING", "nullable": True},
         "unavailable_to": {"type": "STRING", "nullable": True},
         "reply_text": {"type": "STRING"},
+        "decisions": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {"job_id": {"type": "INTEGER"}, "answer": {"type": "STRING", "enum": ["yes", "no"]}},
+                "required": ["job_id", "answer"],
+            },
+        },
+        "decline_rest": {"type": "BOOLEAN"},
     },
-    "required": ["intent", "job_id", "unavailable_from", "unavailable_to", "reply_text"],
+    "required": ["intent", "job_id", "unavailable_from", "unavailable_to", "reply_text", "decisions", "decline_rest"],
 }
 
 CHOOSE_SCHEMA = {
@@ -47,6 +56,8 @@ intent:
 - "no": she declines a job, or cannot do it at the proposed time (e.g. "only after 14:00" when the job starts earlier).
 - "done": she says she finished cleaning.
 - "unavailable": she is sick, away or has an emergency and cannot work for some days (all her jobs in that period must move).
+- "answers": she answers SEVERAL open offers in one message, or accepts only some ("I can't do any, only 6", "όχι
+  στην 7 και 8, τις άλλες ναι", "μόνο την Τρίτη μπορώ", "everything except Friday"). Fill decisions and decline_rest.
 - "status": she asks to see / send / repeat her offers, jobs or schedule ("send me the offers", "τι δουλειές έχω;", "πες μου το πρόγραμμα").
   The system then sends her the real list itself.
 - "other": anything else (question, thanks, small talk).
@@ -55,6 +66,12 @@ unavailable_from / unavailable_to: for "unavailable" only, YYYY-MM-DD, inclusive
 "this week" from today's date in the context. If she gives no end, use the same day as the start. null otherwise.
 reply_text: one short, friendly sentence to her in HER language (context.cleaner.language: en or el). For "no" or
 "unavailable" tell her it is fine and we will arrange it. Never promise anything else. Never invent job details.
+decisions: for "answers" one entry per open offer she clearly accepts ("yes") or refuses ("no"), using job_id from
+open_offers. A number she writes ("την 6", "job 7", "#7") is the job_id if it is in open_offers; otherwise it may be the
+room number (open_offers[].room), then use that room's job. A day or time ("την Τρίτη", "after 14:00 not possible")
+refers to all open offers on that date / time. [] when intent is not "answers".
+decline_rest: true when she refuses everything she did not name ("I can't do any, only 6", "μόνο η 6, οι άλλες όχι"),
+false when the unnamed offers should stay open. Never accept anything she did not clearly accept.
 IMPORTANT: you cannot send, change or arrange anything yourself. For "other" never say you will send or check something;
 only answer briefly, or tell her she can write "offers" / "πρόγραμμα" to see her jobs."""
 
@@ -101,15 +118,17 @@ class GeminiClient:
 
     async def interpret_reply(self, text: str, context: dict) -> dict:
         """-> {"intent": yes|no|done|unavailable|other, "job_id": int|None, "unavailable_from": str|None,
-        "unavailable_to": str|None, "reply_text": str}. Raises LLMError."""
+        "unavailable_to": str|None, "reply_text": str, "decisions": [{job_id, answer}], "decline_rest": bool}. Raises LLMError."""
         data = await self._generate(REPLY_SYSTEM, {"message": text, "context": context}, REPLY_SCHEMA)
         intent = data.get("intent")
         return {
-            "intent": intent if intent in ("yes", "no", "done", "unavailable", "status", "other") else "other",
+            "intent": intent if intent in ("yes", "no", "done", "unavailable", "status", "answers", "other") else "other",
             "job_id": data.get("job_id"),
             "unavailable_from": data.get("unavailable_from"),
             "unavailable_to": data.get("unavailable_to"),
             "reply_text": str(data.get("reply_text") or "").strip(),
+            "decisions": [d for d in (data.get("decisions") or []) if isinstance(d, dict)],
+            "decline_rest": bool(data.get("decline_rest")),
         }
 
     async def choose_cleaner(self, job: dict, candidates: list[dict], context: dict) -> int | None:

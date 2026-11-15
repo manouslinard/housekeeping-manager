@@ -515,6 +515,10 @@ class Agent:
         known = {o["job_id"] for o in ctx["open_offers"]} | {j["job_id"] for j in ctx["upcoming_jobs"]}
         job_id = r.get("job_id") if r.get("job_id") in known else None  # ids Gemini invented are ignored
         intent, reply = r.get("intent"), (r.get("reply_text") or "").strip()
+        if (r.get("decisions") or r.get("decline_rest")) and await self._apply_answers(
+            cleaner, r.get("decisions") or [], bool(r.get("decline_rest")), [o["job_id"] for o in ctx["open_offers"]]
+        ):
+            return
         if intent == "yes":
             await self._answer_offer(cleaner, "yes", job_id)
         elif intent == "no":
@@ -533,6 +537,28 @@ class Agent:
             pass
         else:
             await self._safe_send(cleaner, reply or t(lang, "unknown"))
+
+    async def _apply_answers(self, cleaner, decisions: list, decline_rest: bool, open_ids: list[int]) -> bool:
+        """One message answering several offers ("I can't do any, only 6"). Only her open offers can be touched.
+        False if nothing usable came out of it (the caller then handles the message the normal way)."""
+        yes, no = [], []
+        for d in decisions:
+            jid, ans = d.get("job_id"), d.get("answer")
+            if jid in open_ids and jid not in yes + no and ans in ("yes", "no"):
+                (yes if ans == "yes" else no).append(jid)
+        if decline_rest:
+            no += [j for j in open_ids if j not in yes and j not in no]
+        if not yes and not no:
+            return False
+        for jid in yes:
+            await self._answer_offer(cleaner, "yes", jid)  # sends its own "confirmed" message
+        for jid in no:
+            await self._answer_offer(cleaner, "no", jid, quiet=True)
+        lang = cleaner["language"]
+        if no:
+            await self._safe_send(cleaner, t(lang, "answers_no", ids=", ".join(f"#{j}" for j in no)))
+        await self._advance()  # one new round for everything she refused
+        return True
 
     async def _send_overview(self, cleaner) -> None:
         """She asked for her offers / programme: re-send every open offer, then list the jobs she already holds."""
@@ -619,7 +645,8 @@ class Agent:
         )
         return (late[0], "") if len(late) == 1 else (None, "none")
 
-    async def _answer_offer(self, cleaner, intent: str, job_id: int | None) -> None:
+    async def _answer_offer(self, cleaner, intent: str, job_id: int | None, quiet: bool = False) -> None:
+        """quiet: a refusal sends no message and starts no new round (the caller does that once for a whole batch)."""
         lang = cleaner["language"]
         offer, reason = self._find_offer(cleaner["id"], job_id)
         if offer is None:
@@ -640,8 +667,9 @@ class Agent:
                 self.x("UPDATE offers SET status='declined', responded_at=? WHERE id=?", (now_iso, offer["id"]))
                 if offer["status"] == "pending" and job["status"] == "offering":
                     self.x("UPDATE jobs SET status='pending', updated_at=? WHERE id=?", (now_iso, job["id"]))
-            await self._safe_send(cleaner, t(lang, "declined"), job["id"])
-            await self._advance()
+            if not quiet:
+                await self._safe_send(cleaner, t(lang, "declined"), job["id"])
+                await self._advance()
             return
 
         # intent == "yes"

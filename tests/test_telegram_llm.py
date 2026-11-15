@@ -369,3 +369,42 @@ def test_status_with_nothing_open_says_so():
     e = telegram_env(FakeLLM(reply={"intent": "status"}))
     run(e.agent.handle_inbound("telegram", "tg-maria", "show my jobs"))
     assert "no open offers" in e.messenger.to("tg-maria")[-1]
+
+
+def _two_jobs_for_maria(llm):
+    e = telegram_env(llm)
+    e.add_property("agora", "Agora Flat", 37.9720, 23.7310, {"airbnb": "airbnb://agora"})
+    feed_with_checkout(e, days_ahead=4)
+    e.feeds["airbnb://agora"] = ics(("r9", TODAY, TODAY + timedelta(days=3), "Reserved"))
+    run(e.agent.sync_calendars())
+    return e
+
+
+def test_one_message_accepts_one_offer_and_refuses_the_rest():
+    llm = FakeLLM(reply={"intent": "answers", "decisions": [{"job_id": 2, "answer": "yes"}], "decline_rest": True,
+                         "reply_text": "ok"})
+    e = _two_jobs_for_maria(llm)
+    assert [j["offered_to"] for j in e.agent.list_jobs()] == ["Maria", "Maria"]
+    run(e.agent.handle_inbound("telegram", "tg-maria", "εγώ δεν μπορώ καθόλου, μόνο την 2 μπορώ"))
+    jobs_ = {j["id"]: j for j in e.agent.list_jobs()}
+    assert jobs_[2]["status"] == "assigned" and jobs_[2]["cleaner"] == "Maria"
+    assert jobs_[1]["status"] == "offering" and jobs_[1]["offered_to"] != "Maria"  # next cleaner was asked
+    mine = e.messenger.to("tg-maria")
+    assert any("Confirmed" in b for b in mine) and any("#1" in b and "can't do" in b for b in mine)
+    ctx = llm.reply_calls[0][1]  # Gemini saw both open offers with room/date, so "2" can be matched
+    assert {o["job_id"] for o in ctx["open_offers"]} == {1, 2}
+
+
+def test_batch_answers_ignore_ids_that_are_not_her_open_offers():
+    llm = FakeLLM(reply={"intent": "answers", "decisions": [{"job_id": 77, "answer": "yes"}], "decline_rest": False})
+    e = _two_jobs_for_maria(llm)
+    run(e.agent.handle_inbound("telegram", "tg-maria", "ναι στην 77"))
+    assert all(j["status"] == "offering" and j["offered_to"] == "Maria" for j in e.agent.list_jobs())
+
+
+def test_unmentioned_offers_stay_open_without_decline_rest():
+    llm = FakeLLM(reply={"intent": "answers", "decisions": [{"job_id": 1, "answer": "no"}], "decline_rest": False})
+    e = _two_jobs_for_maria(llm)
+    run(e.agent.handle_inbound("telegram", "tg-maria", "όχι την 1"))
+    jobs_ = {j["id"]: j for j in e.agent.list_jobs()}
+    assert jobs_[2]["offered_to"] == "Maria" and jobs_[1]["offered_to"] != "Maria"
