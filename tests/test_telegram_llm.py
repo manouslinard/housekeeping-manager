@@ -293,3 +293,60 @@ def test_telegram_link_endpoint():
         assert c.get("/api/cleaners/999/telegram-link").status_code == 404
     with make_client(Env(), telegram_bot_token="") as c:
         assert c.get("/api/cleaners/1/telegram-link").status_code == 422
+
+
+# ---- emailing the link --------------------------------------------------------
+class FakeMailer:
+    configured = True
+
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, to, subject, text, html=None):
+        self.sent.append((to, subject, text, html))
+
+
+def test_email_the_one_tap_link():
+    e = telegram_env()
+    e.agent.mailer = FakeMailer()
+    e.db.execute("UPDATE cleaners SET email='maria@example.com' WHERE id=1")
+    with make_client(e, telegram_bot_token="tok", telegram_bot_username="Test_bot") as c:
+        assert c.get("/api/cleaners/1/telegram-link").json()["can_email"] is True
+        r = c.post("/api/cleaners/1/telegram-link/email")
+        assert r.status_code == 200 and r.json()["to"] == "maria@example.com"
+        assert c.post("/api/cleaners/2/telegram-link/email").status_code == 422  # Nikos has no email
+    to, subject, text, html = e.agent.mailer.sent[0]
+    code = e.db.execute("SELECT link_token FROM cleaners WHERE id=1").fetchone()[0]
+    assert to == "maria@example.com" and f"https://t.me/Test_bot?start={code}" in text and code in html
+
+
+def test_email_not_configured_is_a_clear_error():
+    e = telegram_env()
+    e.db.execute("UPDATE cleaners SET email='maria@example.com' WHERE id=1")
+    with make_client(e, telegram_bot_token="tok", telegram_bot_username="Test_bot", smtp_user="", smtp_password="") as c:
+        r = c.post("/api/cleaners/1/telegram-link/email")
+    assert r.status_code == 422 and "SMTP" in r.json()["detail"]
+
+
+def test_new_telegram_cleaner_gets_the_link_by_email(monkeypatch):
+    async def fake_geocode(db, address):
+        return (37.97, 23.73)
+
+    monkeypatch.setattr("app.api.geocode", fake_geocode)
+    e = Env()
+    e.agent.mailer = FakeMailer()
+    with make_client(e, telegram_bot_token="tok", telegram_bot_username="Test_bot") as c:
+        r = c.post("/api/cleaners", json={"name": "Anna K", "phone": "6911111111", "address": "x",
+                                          "channel": "telegram", "email": "anna@example.com"}).json()
+        assert r["emailed"] == "anna@example.com" and e.agent.mailer.sent[0][0] == "anna@example.com"
+        assert c.post("/api/cleaners", json={"name": "B", "phone": "6922222222", "address": "x",
+                                             "email": "not-an-email"}).status_code == 422
+
+
+def test_csv_email_column_is_loaded(tmp_path):
+    from app.loaders import load_cleaners
+    f = tmp_path / "c.csv"
+    f.write_text("name,phone,lat,lon,channel,email\nAnna,+306911111111,37.9,23.7,telegram,anna@example.com\n")
+    e = Env()
+    run(load_cleaners(e.db, str(f), e.settings))
+    assert e.db.execute("SELECT email FROM cleaners WHERE name='Anna'").fetchone()[0] == "anna@example.com"

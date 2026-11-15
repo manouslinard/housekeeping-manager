@@ -3,12 +3,17 @@ from __future__ import annotations
 
 import io
 import re
+from html import escape
 from datetime import date, datetime, time
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from .geo import geocode, normalize_phone
+from .mailer import MailError
+from .templates import t
+
+EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
 
 class CleanerIn(BaseModel):
@@ -16,6 +21,7 @@ class CleanerIn(BaseModel):
     phone: str
     address: str
     channel: str = "sms"          # sms | viber | telegram
+    email: str = ""               # the one-tap Telegram link is emailed here
 
 
 class RoomIn(BaseModel):
@@ -138,7 +144,7 @@ def make_router(admin) -> APIRouter:
         rows = lambda sql: [dict(x) for x in a.q(sql)]  # noqa: E731
         return {
             "rooms": rows("SELECT id, name, address, hotel, room, checkout_time FROM properties ORDER BY COALESCE(hotel, name), CAST(room AS INTEGER), room"),
-            "cleaners": rows("SELECT id, name, phone, address, channel, max_jobs_per_day, telegram_id IS NOT NULL AS linked FROM cleaners WHERE active=1 ORDER BY name"),
+            "cleaners": rows("SELECT id, name, phone, address, channel, email, max_jobs_per_day, telegram_id IS NOT NULL AS linked FROM cleaners WHERE active=1 ORDER BY name"),
             "bookings": rows("SELECT * FROM bookings ORDER BY checkin_date"),
             "jobs": [j for j in a.list_jobs() if j["status"] != "cancelled"],
             "today": a.now().date().isoformat(),
@@ -150,22 +156,31 @@ def make_router(admin) -> APIRouter:
         phone = normalize_phone(body.phone, a.s.default_country_code)
         if not body.name.strip() or not phone:
             raise HTTPException(422, "Χρειάζονται όνομα και τηλέφωνο")
+        email = body.email.strip()
+        if email and not EMAIL_RE.fullmatch(email):
+            raise HTTPException(422, "Μη έγκυρο email")
         pos = await geocode(a.db, body.address)
         if not pos:
             raise HTTPException(422, "Η διεύθυνση δεν βρέθηκε. Δοκίμασε πιο πλήρη διεύθυνση (οδός, αριθμός, πόλη).")
         a.x(
-            """INSERT INTO cleaners(name, phone, lat, lon, address, channel, active, max_jobs_per_day) VALUES (?,?,?,?,?,?,1,?)
+            """INSERT INTO cleaners(name, phone, lat, lon, address, channel, email, active, max_jobs_per_day) VALUES (?,?,?,?,?,?,NULLIF(?,''),1,?)
                ON CONFLICT(phone) DO UPDATE SET name=excluded.name, lat=excluded.lat, lon=excluded.lon,
-                 address=excluded.address, channel=excluded.channel, active=1""",
+                 address=excluded.address, channel=excluded.channel, email=excluded.email, active=1""",
             (body.name.strip(), phone, *pos, body.address, body.channel if body.channel in ("sms", "viber", "telegram") else "sms",
-             a.s.default_max_jobs_per_day),
+             email, a.s.default_max_jobs_per_day),
         )
-        return {"ok": True}
+        out = {"ok": True}
+        if body.channel == "telegram" and email and a.mailer.configured and a.s.telegram_bot_token:
+            cid = a.q1("SELECT id FROM cleaners WHERE phone=?", (phone,))["id"]  # new Telegram cleaner: email her the link now
+            try:
+                await email_link(a, cid)
+                out["emailed"] = email
+            except HTTPException as exc:
+                out["email_error"] = exc.detail
+        return out
 
-    @r.get("/cleaners/{cid}/telegram-link")
-    async def telegram_link(cid: int, request: Request):
+    async def link_for(a, cid: int) -> dict:
         """One-tap link for a cleaner: t.me/<bot>?start=<single-use code>. She taps it, presses Start, done."""
-        a = ag(request)
         if not a.s.telegram_bot_token:
             raise HTTPException(422, "Δεν έχει οριστεί TELEGRAM_BOT_TOKEN στο .env")
         if not a.s.telegram_bot_username:
@@ -177,9 +192,37 @@ def make_router(admin) -> APIRouter:
         code = a.telegram_link_token(cid)
         if code is None:
             raise HTTPException(404, "Άγνωστη καθαρίστρια")
-        c = a.q1("SELECT name, telegram_id FROM cleaners WHERE id=?", (cid,))
+        c = a.q1("SELECT name, telegram_id, email, language FROM cleaners WHERE id=?", (cid,))
         return {"url": f"https://t.me/{a.s.telegram_bot_username}?start={code}", "name": c["name"],
-                "linked": c["telegram_id"] is not None}
+                "linked": c["telegram_id"] is not None, "email": c["email"] or "", "language": c["language"],
+                "can_email": bool(c["email"]) and a.mailer.configured}
+
+    async def email_link(a, cid: int) -> str:
+        info = await link_for(a, cid)
+        if not info["email"]:
+            raise HTTPException(422, "Η καθαρίστρια δεν έχει email")
+        if not a.mailer.configured:
+            raise HTTPException(422, "Δεν έχει ρυθμιστεί το email: συμπλήρωσε SMTP_USER και SMTP_PASSWORD στο .env")
+        lang, name, url = info["language"], info["name"].split()[0], info["url"]
+        html_ = f"""<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;color:#14161f">
+<p style="font-size:16px">{escape(t(lang, "link_email_text", name=name, url=url).split(chr(10))[0])}</p>
+<p>{t(lang, "link_email_steps")}</p>
+<p style="text-align:center;margin:28px 0"><a href="{escape(url)}" style="background:#229ED9;color:#fff;padding:14px 26px;
+border-radius:10px;text-decoration:none;font-weight:bold;font-size:16px">✈ {escape(t(lang, "link_email_button"))}</a></p>
+<p style="color:#6b7280;font-size:12px;word-break:break-all">{escape(url)}</p></div>"""
+        try:
+            await a.mailer.send(info["email"], t(lang, "link_email_subject"), t(lang, "link_email_text", name=name, url=url), html_)
+        except MailError as exc:
+            raise HTTPException(502, str(exc))
+        return info["email"]
+
+    @r.get("/cleaners/{cid}/telegram-link")
+    async def telegram_link(cid: int, request: Request):
+        return await link_for(ag(request), cid)
+
+    @r.post("/cleaners/{cid}/telegram-link/email")
+    async def telegram_link_email(cid: int, request: Request):
+        return {"ok": True, "to": await email_link(ag(request), cid)}
 
     @r.delete("/cleaners/{cid}")
     async def del_cleaner(cid: int, request: Request):

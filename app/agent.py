@@ -13,6 +13,7 @@ from .config import Settings
 from .geo import haversine_km, normalize_phone
 from .ical import Reservation, fetch_ics, parse_ics
 from .llm import LLMError
+from .mailer import Mailer
 from .loaders import load_cleaners, load_properties
 from .messaging import Recipient, SendError
 from .replies import parse_reply
@@ -42,13 +43,14 @@ def iso(dt: datetime) -> str:
 
 
 class Agent:
-    def __init__(self, settings: Settings, db, messenger, now_fn=None, fetch_fn=None, llm=None):
+    def __init__(self, settings: Settings, db, messenger, now_fn=None, fetch_fn=None, llm=None, mailer=None):
         self.s = settings
         self.db = db
         self.messenger = messenger
         self.tz = ZoneInfo(settings.timezone)
         self.now = now_fn or (lambda: datetime.now(self.tz))
         self.fetch = fetch_fn or fetch_ics
+        self.mailer = mailer or Mailer(settings)
         self.llm = llm  # app.llm.GeminiClient or a fake; None = no Gemini, the app works as before
         self.lock = asyncio.Lock()
         self._mtimes: dict[str, float | None] = {}

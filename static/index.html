@@ -96,6 +96,7 @@ label input,label select{margin-top:3px;color:var(--ink)}
   <h3>Νέα καθαρίστρια</h3>
   <label>Όνομα<input name="name" required></label>
   <label>Τηλέφωνο<input name="phone" required placeholder="+30 690 000 0000"></label>
+  <label>Email (εκεί στέλνεται ο σύνδεσμος Telegram)<input name="email" type="email" placeholder="name@gmail.com"></label>
   <label>Κανάλι<select name="channel"><option value="telegram">Telegram</option><option value="sms">SMS</option><option value="viber">Viber</option></select></label>
   <label>Διεύθυνση<input name="address" required placeholder="Οδός, αριθμός, πόλη"></label>
   <p class="ferr"></p>
@@ -150,7 +151,7 @@ label input,label select{margin-top:3px;color:var(--ink)}
   <div id="tgQr" style="display:grid;place-items:center;margin:12px 0"></div>
   <input id="tgUrl" readonly onclick="this.select()">
   <p id="tgState" class="meta"></p>
-  <div class="actions"><button type="button" data-close>Κλείσιμο</button><button type="button" id="tgShare">Κοινοποίηση</button><button type="button" class="pri" id="tgCopy">Αντιγραφή</button></div>
+  <div class="actions"><button type="button" data-close>Κλείσιμο</button><button type="button" id="tgShare">Κοινοποίηση</button><button type="button" id="tgMail">✉ Αποστολή στο email</button><button type="button" class="pri" id="tgCopy">Αντιγραφή</button></div>
 </dialog>
 
 <dialog id="dDetail"><h3 id="dtTitle"></h3><div id="dtBody"></div>
@@ -208,7 +209,7 @@ function renderCleaners() {
       <div><b>${esc(c.name)}</b><span class="meta">${esc(c.phone)}</span></div>
       ${c.channel === "telegram" ? `<button class="x tg" data-tg-link="${c.id}" title="Σύνδεσμος σύνδεσης Telegram">🔗 Telegram</button>` : ""}
       <button class="x" data-del-cleaner="${c.id}" title="Αφαίρεση">✕</button></div>
-      <div class="meta" style="margin-top:8px">📍 ${esc(c.address || "—")}</div>
+      <div class="meta" style="margin-top:8px">📍 ${esc(c.address || "—")}${c.email ? `<br>✉ ${esc(c.email)}` : ""}</div>
       <div style="margin-top:6px"><span class="tag">${esc(c.channel)}${c.channel === "telegram" && !c.linked ? " ⚠ δεν έχει συνδεθεί" : ""}</span><span class="tag">έως ${c.max_jobs_per_day}/ημέρα</span><span class="tag">${mine.length} αναθέσεις</span>${asked.length ? `<span class="tag" style="color:var(--offering)">${asked.length} σε εκκρεμότητα</span>` : ""}</div>
       ${asked.length ? `<div class="jobs">${asked.slice(0, 3).map(j => `<div><span>${fmtD(j.checkout_date)}</span><span>${esc(room(j.property_id))}</span><span class="meta">${j.queued ? "⏳ στην ουρά" : "ζητήθηκε"} · ${j.offered_km.toFixed(1)} χλμ</span></div>`).join("")}</div>` : ""}
       ${mine.length ? `<div class="jobs">${mine.slice(0, 5).map(j => `<div><span>${fmtD(j.checkout_date)}</span><span>${esc(room(j.property_id))}</span><span class="meta">${esc(j.checkout_time)}</span></div>`).join("")}${mine.length > 5 ? `<div class="meta">+${mine.length - 5} ακόμη</div>` : ""}</div>`
@@ -306,6 +307,15 @@ async function showTgLink(id) {
   try { new QRCode(qr, {text: res.url, width: 180, height: 180}); } catch { qr.innerHTML = ""; } // offline: link still works
   $("#tgCopy").onclick = async () => { try { await navigator.clipboard.writeText(res.url); toast("Αντιγράφηκε"); } catch { $("#tgUrl").select(); } };
   $("#tgShare").hidden = !navigator.share;
+  const mail = $("#tgMail");
+  mail.hidden = !res.email; mail.disabled = !res.can_email;
+  mail.title = res.can_email ? res.email : "Συμπλήρωσε SMTP_USER / SMTP_PASSWORD στο .env";
+  mail.onclick = async () => {
+    mail.disabled = true;
+    try { const r = await api(`/api/cleaners/${id}/telegram-link/email`, {method: "POST"}); toast("Στάλθηκε στο " + r.to); }
+    catch (err) { toast(err.message, true); }
+    finally { mail.disabled = false; }
+  };
   $("#tgShare").onclick = () => navigator.share({title: "Σύνδεση Telegram", text: `Γεια σου ${res.name}! Πάτα εδώ και μετά Start για να λαμβάνεις τα καθαρίσματα:`, url: res.url}).catch(() => {});
   $("#dTg").showModal();
 }
@@ -345,7 +355,8 @@ document.addEventListener("submit", async e => {
       opts = {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(o)};
     }
     const res = await api(f.dataset.api, opts);
-    toast(res.bookings != null ? `Εισήχθησαν ${res.bookings} κρατήσεις` + (res.skipped ? ` · ${res.skipped} παραλείφθηκαν (υπάρχουν ήδη)` : "") : "Αποθηκεύτηκε");
+    if (res.email_error) toast("Αποθηκεύτηκε, αλλά το email απέτυχε: " + res.email_error, true); else
+    toast(res.emailed ? "Αποθηκεύτηκε · ο σύνδεσμος Telegram στάλθηκε στο " + res.emailed : res.bookings != null ? `Εισήχθησαν ${res.bookings} κρατήσεις` + (res.skipped ? ` · ${res.skipped} παραλείφθηκαν (υπάρχουν ήδη)` : "") : "Αποθηκεύτηκε");
     if (res.first_date) $("#start").value = res.first_date; // show the imported period, not today
     const hotel = f.dataset.api === "/api/rooms" ? f.hotel.value.trim() : null;
     f.reset(); f.closest("dialog").close(); await load();

@@ -55,14 +55,15 @@ async def load_cleaners(db, path: str, s: Settings) -> int:
         lang = lang if lang in ("en", "el") else "en"
         max_jobs = int(row["max_jobs_per_day"]) if row.get("max_jobs_per_day", "").isdigit() else s.default_max_jobs_per_day
         db.execute(
-            """INSERT INTO cleaners(name, phone, lat, lon, address, channel, language, viber_id, active, max_jobs_per_day)
-               VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), 1, ?)
+            """INSERT INTO cleaners(name, phone, lat, lon, address, channel, language, viber_id, active, max_jobs_per_day, email)
+               VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), 1, ?, NULLIF(?, ''))
                ON CONFLICT(phone) DO UPDATE SET
                  name=excluded.name, lat=excluded.lat, lon=excluded.lon, address=excluded.address,
                  channel=excluded.channel, language=excluded.language,
                  max_jobs_per_day=excluded.max_jobs_per_day,
+                 email=COALESCE(excluded.email, cleaners.email),
                  viber_id=COALESCE(NULLIF(excluded.viber_id, ''), cleaners.viber_id)""",
-            (row["name"], phone, lat, lon, row.get("address", ""), channel, lang, row.get("viber_id", ""), max_jobs),
+            (row["name"], phone, lat, lon, row.get("address", ""), channel, lang, row.get("viber_id", ""), max_jobs, row.get("email", "")),
         )
         seen.append(phone)
     log.info("loaded %d cleaners", len(seen))

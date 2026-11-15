@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS cleaners (
     language TEXT NOT NULL DEFAULT 'en',        -- en | el
     viber_id TEXT,
     telegram_id TEXT,
+    email TEXT,                                  -- where the one-tap Telegram link is emailed
     link_token TEXT,                             -- single-use code in the t.me/<bot>?start=<code> link
     active INTEGER NOT NULL DEFAULT 1,
     max_jobs_per_day INTEGER NOT NULL DEFAULT 3
@@ -113,7 +114,7 @@ def connect(path: str) -> sqlite3.Connection:
         if col not in have:
             conn.execute(f"ALTER TABLE properties ADD COLUMN {col} TEXT")
     cleaner_cols = {r[1] for r in conn.execute("PRAGMA table_info(cleaners)")}
-    for col in ("telegram_id", "link_token"):
+    for col in ("telegram_id", "link_token", "email"):
         if col not in cleaner_cols:
             conn.execute(f"ALTER TABLE cleaners ADD COLUMN {col} TEXT")
     if "kind" not in {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}:
