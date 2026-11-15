@@ -40,11 +40,7 @@ class FakeMessenger:
 
         if rcpt.phone in self.fail_for:
             raise SendError("boom")
-        channel = rcpt.channel
-        if (channel == "viber" and not rcpt.viber_id) or (channel == "telegram" and not rcpt.telegram_id):
-            channel = "sms"  # same fallback as the real Messenger
-        party = {"viber": rcpt.viber_id, "telegram": rcpt.telegram_id}.get(channel) or rcpt.phone
-        self.sent.append((channel, party, body))
+        self.sent.append(("telegram", rcpt.telegram_id or rcpt.phone, body))
 
     def log_inbound(self, *a, **k):
         pass
@@ -58,7 +54,7 @@ class Env:
 
     def __init__(self, llm=None, **overrides):
         xlsx = tempfile.mkdtemp() + "/schedules.xlsx"
-        self.settings = Settings(**{"dry_run": True, "owner_phone": "+306999999999", "skip_sunday": False,
+        self.settings = Settings(**{"dry_run": True, "owner_chat_id": "owner-chat", "skip_sunday": False,
                                     "schedule_xlsx": xlsx, **overrides})
         self.db = connect(":memory:")
         self.messenger = FakeMessenger()
@@ -72,10 +68,11 @@ class Env:
             raise RuntimeError("network down")
         return self.feeds[url]
 
-    def add_cleaner(self, name, phone, lat, lon, channel="sms", lang="en", max_jobs=3, viber_id=None, telegram_id=None):
+    def add_cleaner(self, name, phone, lat, lon, lang="en", max_jobs=3, telegram_id="same-as-phone"):
+        """telegram_id defaults to the phone number (any string works as a chat id); pass None for 'not linked yet'."""
         self.db.execute(
-            "INSERT INTO cleaners(name, phone, lat, lon, channel, language, viber_id, telegram_id, max_jobs_per_day) VALUES (?,?,?,?,?,?,?,?,?)",
-            (name, phone, lat, lon, channel, lang, viber_id, telegram_id, max_jobs),
+            "INSERT INTO cleaners(name, phone, lat, lon, language, telegram_id, max_jobs_per_day) VALUES (?,?,?,?,?,?,?)",
+            (name, phone, lat, lon, lang, phone if telegram_id == "same-as-phone" else telegram_id, max_jobs),
         )
 
     def add_property(self, pid, name, lat, lon, urls: dict[str, str]):
@@ -96,6 +93,6 @@ def env():
     # Property in Plaka. Maria is ~1 km away, Nikos ~10 km, Elena ~12 km.
     e.add_property("plaka", "Plaka Studio", 37.9715, 23.7300, {"airbnb": "airbnb://plaka"})
     e.add_cleaner("Maria", "+306900000001", 37.9755, 23.7348)
-    e.add_cleaner("Nikos", "+306900000002", 38.0735, 23.8118, channel="viber", viber_id="vb-nikos")
+    e.add_cleaner("Nikos", "+306900000002", 38.0735, 23.8118)
     e.add_cleaner("Elena", "+306900000003", 37.8650, 23.7530)
     return e

@@ -1,11 +1,8 @@
-"""FastAPI app: inbound SMS/Viber webhooks, a few admin endpoints, and the background loop."""
+"""FastAPI app: Telegram (polling or webhook), a few admin endpoints, and the background loop."""
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
 import hmac
-import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -25,17 +22,6 @@ from .telegram import parse_update, poll_forever, set_webhook
 from .view import router as web_router
 
 log = logging.getLogger("cleaner-agent")
-
-
-def valid_twilio_signature(token: str, url: str, params: dict, signature: str) -> bool:
-    data = url + "".join(k + str(params[k]) for k in sorted(params))
-    digest = hmac.new(token.encode(), data.encode(), hashlib.sha1).digest()
-    return hmac.compare_digest(base64.b64encode(digest).decode(), signature or "")
-
-
-def valid_viber_signature(token: str, body: bytes, signature: str) -> bool:
-    digest = hmac.new(token.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(digest, signature or "")
 
 
 async def _run_forever(agent: Agent) -> None:
@@ -127,48 +113,11 @@ def create_app(settings: Settings | None = None, agent: Agent | None = None, bac
             raise HTTPException(404, "Job not found or not retryable")
         return {"ok": True}
 
-    async def _safe_inbound(ag: Agent, channel: str, sender: str, text: str) -> None:
+    async def _safe_inbound(ag: Agent, chat_id: str, text: str) -> None:
         try:
-            await ag.handle_inbound(channel, sender, text)
+            await ag.handle_inbound(chat_id, text)
         except Exception:
-            log.exception("failed to handle inbound %s message", channel)
-
-    @app.post("/webhooks/twilio")
-    async def twilio_webhook(request: Request, tasks: BackgroundTasks):
-        form = await request.form()
-        params = {k: str(v) for k, v in form.items()}
-        if not settings.dry_run and settings.verify_webhooks:
-            url = settings.public_base_url + "/webhooks/twilio"
-            sig = request.headers.get("x-twilio-signature", "")
-            if not settings.twilio_auth_token or not valid_twilio_signature(settings.twilio_auth_token, url, params, sig):
-                raise HTTPException(403, "Invalid Twilio signature")
-        tasks.add_task(_safe_inbound, request.app.state.agent, "sms", params.get("From", ""), params.get("Body", ""))
-        return Response("<Response/>", media_type="application/xml")
-
-    @app.post("/webhooks/viber")
-    async def viber_webhook(request: Request, tasks: BackgroundTasks):
-        raw = await request.body()
-        if not settings.dry_run and settings.verify_webhooks:
-            sig = request.headers.get("x-viber-content-signature", "")
-            if not settings.viber_auth_token or not valid_viber_signature(settings.viber_auth_token, raw, sig):
-                raise HTTPException(403, "Invalid Viber signature")
-        try:
-            data = json.loads(raw or b"{}")
-        except ValueError:
-            raise HTTPException(400, "Bad JSON")
-        event = data.get("event")
-        if event == "conversation_started":
-            return {
-                "sender": {"name": settings.viber_sender_name[:28]},
-                "type": "text",
-                "text": "Hi! Please send your phone number exactly as registered with us (e.g. +306912345678) to link this chat.",
-            }
-        if event == "message":
-            text = (data.get("message") or {}).get("text", "")
-            sender = (data.get("sender") or {}).get("id", "")
-            if sender and text:
-                tasks.add_task(_safe_inbound, request.app.state.agent, "viber", sender, text)
-        return {"status": 0}
+            log.exception("failed to handle inbound Telegram message")
 
     @app.post("/webhooks/telegram")
     async def telegram_webhook(request: Request, tasks: BackgroundTasks):
@@ -185,7 +134,7 @@ def create_app(settings: Settings | None = None, agent: Agent | None = None, bac
             raise HTTPException(400, "Bad JSON")
         msg = parse_update(update) if isinstance(update, dict) else None
         if msg:
-            tasks.add_task(_safe_inbound, request.app.state.agent, "telegram", msg["chat_id"], msg["text"] or msg["contact_phone"])
+            tasks.add_task(_safe_inbound, request.app.state.agent, msg["chat_id"], msg["text"] or msg["contact_phone"])
         return {"ok": True}
 
     return app

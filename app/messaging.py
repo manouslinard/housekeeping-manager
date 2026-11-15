@@ -1,4 +1,4 @@
-"""Sending texts: Twilio SMS, Viber and Telegram, plus a dry-run mode that just prints."""
+"""Sending messages on Telegram, plus a dry-run mode that just prints."""
 from __future__ import annotations
 
 import logging
@@ -18,10 +18,8 @@ class SendError(Exception):
 
 @dataclass
 class Recipient:
-    phone: str
-    channel: str = "sms"          # sms | viber | telegram
-    viber_id: str | None = None
-    telegram_id: str | None = None
+    telegram_id: str | None = None   # Telegram chat id, known once the person has pressed Start
+    phone: str = ""                  # only used to label the log line in dry-run, before the chat is linked
 
 
 class Messenger:
@@ -30,81 +28,29 @@ class Messenger:
         self.db = db
 
     async def send(self, rcpt: Recipient, body: str, job_id: int | None = None) -> None:
-        channel = rcpt.channel
-        if channel in ("viber", "telegram") and not (rcpt.viber_id if channel == "viber" else rcpt.telegram_id):
-            # Viber/Telegram bots can only reach people who already opened the chat; fall back to SMS until they do.
-            log.info("no %s id for %s, falling back to SMS", channel, rcpt.phone)
-            channel = "sms"
-        party = {"viber": rcpt.viber_id, "telegram": rcpt.telegram_id}.get(channel) or rcpt.phone
-
+        # Bots can't message a phone number: the person must open the bot and press Start first.
+        party = rcpt.telegram_id or rcpt.phone
         if self.s.dry_run:
             provider = "dry-run"
-            log.info("[dry-run %s -> %s] %s", channel, party, body)
-        elif channel == "sms":
-            await self._twilio(rcpt.phone, body)
-            provider = "twilio"
-        elif channel == "viber":
-            await self._viber(rcpt.viber_id or "", body)
-            provider = "viber"
-        elif channel == "telegram":
-            await self._telegram(rcpt.telegram_id or "", body)
-            provider = "telegram"
+            log.info("[dry-run telegram -> %s] %s", party, body)
+        elif not rcpt.telegram_id:
+            raise SendError(f"{rcpt.phone or 'recipient'} has not linked Telegram yet")
         else:
-            raise SendError(f"unknown channel {channel!r}")
+            await self._telegram(rcpt.telegram_id, body)
+            provider = "telegram"
 
         self.db.execute(
             "INSERT INTO messages(direction, channel, party, body, job_id, provider, created_at) "
-            "VALUES ('out', ?, ?, ?, ?, ?, ?)",
-            (channel, party, body, job_id, provider, datetime.now(timezone.utc).isoformat(timespec="seconds")),
+            "VALUES ('out', 'telegram', ?, ?, ?, ?, ?)",
+            (party, body, job_id, provider, datetime.now(timezone.utc).isoformat(timespec="seconds")),
         )
 
-    def log_inbound(self, channel: str, party: str, body: str) -> None:
+    def log_inbound(self, party: str, body: str) -> None:
         self.db.execute(
             "INSERT INTO messages(direction, channel, party, body, provider, created_at) "
-            "VALUES ('in', ?, ?, ?, ?, ?)",
-            (channel, party, body, channel, datetime.now(timezone.utc).isoformat(timespec="seconds")),
+            "VALUES ('in', 'telegram', ?, ?, 'telegram', ?)",
+            (party, body, datetime.now(timezone.utc).isoformat(timespec="seconds")),
         )
-
-    async def _twilio(self, to: str, body: str) -> None:
-        s = self.s
-        if not (s.twilio_account_sid and s.twilio_auth_token and s.twilio_from):
-            raise SendError("Twilio is not configured (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM)")
-        url = f"https://api.twilio.com/2010-04-01/Accounts/{s.twilio_account_sid}/Messages.json"
-        try:
-            async with httpx.AsyncClient(timeout=20) as c:
-                r = await c.post(
-                    url,
-                    auth=(s.twilio_account_sid, s.twilio_auth_token),
-                    data={"To": to, "From": s.twilio_from, "Body": body},
-                )
-        except httpx.HTTPError as exc:
-            raise SendError(f"Twilio request failed: {exc}") from exc
-        if r.status_code >= 400:
-            raise SendError(f"Twilio error {r.status_code}: {r.text[:200]}")
-
-    async def _viber(self, receiver: str, body: str) -> None:
-        s = self.s
-        if not s.viber_auth_token:
-            raise SendError("Viber is not configured (VIBER_AUTH_TOKEN)")
-        payload = {
-            "receiver": receiver,
-            "min_api_version": 1,
-            "sender": {"name": s.viber_sender_name[:28]},
-            "type": "text",
-            "text": body,
-        }
-        try:
-            async with httpx.AsyncClient(timeout=20) as c:
-                r = await c.post(
-                    "https://chatapi.viber.com/pa/send_message",
-                    headers={"X-Viber-Auth-Token": s.viber_auth_token},
-                    json=payload,
-                )
-            data = r.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            raise SendError(f"Viber request failed: {exc}") from exc
-        if data.get("status") != 0:
-            raise SendError(f"Viber error: {data.get('status_message', data)}")
 
     async def _telegram(self, chat_id: str, body: str) -> None:
         s = self.s

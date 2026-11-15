@@ -82,7 +82,7 @@ class Agent:
             return None
 
     async def _send(self, cleaner, body: str, job_id: int | None = None) -> None:
-        await self.messenger.send(Recipient(cleaner["phone"], cleaner["channel"], cleaner["viber_id"], cleaner["telegram_id"]), body, job_id)
+        await self.messenger.send(Recipient(cleaner["telegram_id"], cleaner["phone"]), body, job_id)
 
     async def _safe_send(self, cleaner, body: str, job_id: int | None = None) -> None:
         try:
@@ -91,11 +91,11 @@ class Agent:
             log.error("could not message %s: %s", cleaner["name"], exc)
 
     async def _notify_owner(self, key: str, **kw) -> None:
-        if not self.s.owner_phone:
+        if not self.s.owner_chat_id:
             return
         body = t(self.s.owner_language, key, **kw)
         try:
-            await self.messenger.send(Recipient(self.s.owner_phone, self.s.owner_channel), body, kw.get("id"))
+            await self.messenger.send(Recipient(self.s.owner_chat_id), body, kw.get("id"))
         except SendError as exc:
             log.error("could not message owner: %s", exc)
 
@@ -267,16 +267,9 @@ class Agent:
         return len(day) >= cleaner["max_jobs_per_day"] or any(abs(m - start) < self.s.cleaning_min for m in day)
 
     def _reachable(self, c) -> bool:
-        """Can a message actually get to her? (Telegram/Viber fall back to SMS until she links the chat.)
+        """Can a message actually get to her? Only once she has pressed Start in the bot (we then know her chat id).
         Unreachable cleaners are skipped instead of burning the job with failed offers."""
-        s = self.s
-        if s.dry_run:
-            return True
-        if c["channel"] == "telegram" and c["telegram_id"] and s.telegram_bot_token:
-            return True
-        if c["channel"] == "viber" and c["viber_id"] and s.viber_auth_token:
-            return True
-        return bool(s.twilio_account_sid and s.twilio_auth_token and s.twilio_from)
+        return self.s.dry_run or bool(c["telegram_id"] and self.s.telegram_bot_token)
 
     def _away(self, cleaner_id: int, day: str) -> bool:
         return self.q1(
@@ -389,29 +382,22 @@ class Agent:
             return True
 
     # ---- inbound texts -------------------------------------------------
-    async def handle_inbound(self, channel: str, sender: str, text: str) -> None:
+    async def handle_inbound(self, chat_id: str, text: str) -> None:
+        """Entry point for every incoming Telegram message (chat id of the sender + her text)."""
         async with self.lock:
             try:
-                self.messenger.log_inbound(channel, sender, text)
+                self.messenger.log_inbound(chat_id, text)
             except Exception:  # logging must never block handling
                 log.exception("could not log inbound message")
-            await self._inbound(channel, sender, text)
+            await self._inbound(chat_id, text)
 
-    async def _inbound(self, channel: str, sender: str, text: str) -> None:
-        cc = self.s.default_country_code
-        if channel == "telegram" and await self._link_by_token(sender, text):
+    async def _inbound(self, chat_id: str, text: str) -> None:
+        if await self._link_by_token(chat_id, text):
             return
-        if channel in ("viber", "telegram"):
-            col = f"{channel}_id"
-            cleaner = self.q1(f"SELECT * FROM cleaners WHERE {col}=? AND active=1", (sender,))
-            if cleaner is None:
-                await self._link_chat(channel, sender, text)
-                return
-        else:
-            cleaner = self.q1("SELECT * FROM cleaners WHERE phone=? AND active=1", (normalize_phone(sender, cc),))
-            if cleaner is None:
-                log.info("ignoring text from unknown number %s", sender)
-                return
+        cleaner = self.q1("SELECT * FROM cleaners WHERE telegram_id=? AND active=1", (chat_id,))
+        if cleaner is None:
+            await self._link_chat(chat_id, text)
+            return
 
         lang = cleaner["language"]
         intent, job_id = parse_reply(text)
@@ -443,41 +429,40 @@ class Agent:
         cleaner = self.q1("SELECT * FROM cleaners WHERE link_token=? AND active=1", (m[1],))
         if cleaner is None:  # used already, or an old link: fall back to asking for the phone number
             try:
-                await self.messenger.send(Recipient("", "telegram", telegram_id=chat_id), t("el", "link_expired"))
+                await self.messenger.send(Recipient(chat_id), t("el", "link_expired"))
             except SendError as exc:
                 log.error("telegram prompt failed: %s", exc)
             return True
         self.x("UPDATE cleaners SET link_token=NULL WHERE id=?", (cleaner["id"],))  # single use: a forwarded link is dead
-        await self._linked("telegram", chat_id, cleaner)
+        await self._linked(chat_id, cleaner)
         return True
 
-    async def _linked(self, channel: str, chat_id: str, cleaner) -> None:
+    async def _linked(self, chat_id: str, cleaner) -> None:
         """Save the chat id, say hello, and give open jobs another round so her offers arrive right away."""
-        self.x(f"UPDATE cleaners SET {channel}_id=NULL WHERE {channel}_id=?", (chat_id,))
-        self.x(f"UPDATE cleaners SET {channel}_id=? WHERE id=?", (chat_id, cleaner["id"]))
-        log.info("linked %s chat to cleaner %s", channel, cleaner["name"])
-        rcpt = Recipient("", channel, chat_id) if channel == "viber" else Recipient("", channel, telegram_id=chat_id)
+        self.x("UPDATE cleaners SET telegram_id=NULL WHERE telegram_id=?", (chat_id,))
+        self.x("UPDATE cleaners SET telegram_id=? WHERE id=?", (chat_id, cleaner["id"]))
+        log.info("linked Telegram chat to cleaner %s", cleaner["name"])
         try:
-            await self.messenger.send(rcpt, t(cleaner["language"], "linked", name=cleaner["name"]))
+            await self.messenger.send(Recipient(chat_id), t(cleaner["language"], "linked", name=cleaner["name"]))
         except SendError as exc:
-            log.error("%s link reply failed: %s", channel, exc)
+            log.error("Telegram link reply failed: %s", exc)
         self.x("UPDATE offers SET status='retired' WHERE cleaner_id=? AND status='failed'", (cleaner["id"],))
         self.x("UPDATE jobs SET status='pending', updated_at=? WHERE status='unfilled'", (iso(self.now()),))
         await self._advance()
 
-    async def _link_chat(self, channel: str, chat_id: str, text: str) -> None:
-        """Viber/Telegram users are identified by an opaque id; match it to a cleaner via their phone number."""
-        rcpt = Recipient("", channel, chat_id) if channel == "viber" else Recipient("", channel, telegram_id=chat_id)
+    async def _link_chat(self, chat_id: str, text: str) -> None:
+        """A chat id is opaque: match it to a cleaner via the phone number she sends (the one-tap link is the easy way)."""
+        rcpt = Recipient(chat_id)
         if len(re.sub(r"\D", "", text)) >= 7:
             phone = normalize_phone(text, self.s.default_country_code)
             cleaner = self.q1("SELECT * FROM cleaners WHERE phone=? AND active=1", (phone,))
             if cleaner is not None:
-                await self._linked(channel, chat_id, cleaner)
+                await self._linked(chat_id, cleaner)
                 return
         try:
             await self.messenger.send(rcpt, t("en", "link_prompt"))
         except SendError as exc:
-            log.error("%s prompt failed: %s", channel, exc)
+            log.error("Telegram prompt failed: %s", exc)
 
     # ---- free-text replies (Gemini) -----------------------------------
     def _reply_context(self, cleaner) -> dict:

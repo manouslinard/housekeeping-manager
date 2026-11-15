@@ -1,4 +1,4 @@
-"""Message texts (English and Greek). Plain ASCII-friendly wording keeps SMS segments cheap."""
+"""Message texts (English and Greek). Short, plain wording."""
 from __future__ import annotations
 
 from datetime import date

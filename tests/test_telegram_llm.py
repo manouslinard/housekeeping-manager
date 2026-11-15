@@ -38,7 +38,7 @@ class FakeLLM:
 def telegram_env(llm=None):
     e = Env(llm=llm)
     e.add_property("plaka", "Plaka Studio", 37.9715, 23.7300, {"airbnb": "airbnb://plaka"})
-    e.add_cleaner("Maria", MARIA, 37.9755, 23.7348, channel="telegram", telegram_id="tg-maria")
+    e.add_cleaner("Maria", MARIA, 37.9755, 23.7348, telegram_id="tg-maria")
     e.add_cleaner("Nikos", "+306900000002", 38.0735, 23.8118)
     e.add_cleaner("Elena", "+306900000003", 37.8650, 23.7530)
     return e
@@ -52,15 +52,17 @@ def offered_to(e):
 # ---- Part 1: Telegram ---------------------------------------------------
 def test_dry_run_send_logs_a_telegram_message():
     db = connect(":memory:")
-    asyncio.run(Messenger(Settings(dry_run=True), db).send(Recipient("+30690", "telegram", telegram_id="42"), "hi", 7))
+    asyncio.run(Messenger(Settings(dry_run=True), db).send(Recipient("42", "+30690"), "hi", 7))
     row = db.execute("SELECT channel, party, provider FROM messages").fetchone()
     assert (row["channel"], row["party"], row["provider"]) == ("telegram", "42", "dry-run")
 
 
-def test_telegram_without_chat_id_falls_back_to_sms():
+def test_live_send_to_an_unlinked_person_is_an_error():
+    import pytest
+    from app.messaging import SendError
     db = connect(":memory:")
-    asyncio.run(Messenger(Settings(dry_run=True), db).send(Recipient("+30690", "telegram"), "hi"))
-    assert db.execute("SELECT channel FROM messages").fetchone()["channel"] == "sms"
+    with pytest.raises(SendError):
+        asyncio.run(Messenger(Settings(dry_run=False, telegram_bot_token="tok"), db).send(Recipient(None, "+30690"), "hi"))
 
 
 def test_offer_goes_to_telegram_and_yes_assigns():
@@ -68,16 +70,16 @@ def test_offer_goes_to_telegram_and_yes_assigns():
     feed_with_checkout(e)
     run(e.agent.sync_calendars())
     assert any("YES 1" in b for b in e.messenger.to("tg-maria"))
-    run(e.agent.handle_inbound("telegram", "tg-maria", "yes"))
+    run(e.agent.handle_inbound("tg-maria", "yes"))
     assert e.agent.list_jobs()[0]["status"] == "assigned"
 
 
 def test_link_flow_matches_phone_and_saves_telegram_id():
     e = telegram_env()
     e.db.execute("UPDATE cleaners SET telegram_id=NULL")
-    run(e.agent.handle_inbound("telegram", "555", "/start"))
+    run(e.agent.handle_inbound("555", "/start"))
     assert "phone number" in e.messenger.to("555")[0]  # chat is unknown: asked for the phone
-    run(e.agent.handle_inbound("telegram", "555", "6900000001"))
+    run(e.agent.handle_inbound("555", "6900000001"))
     assert e.db.execute("SELECT telegram_id FROM cleaners WHERE name='Maria'").fetchone()[0] == "555"
     assert "linked" in e.messenger.to("555")[-1]
 
@@ -122,7 +124,7 @@ def test_excel_lists_each_cleaners_program_from_the_db():
     e = telegram_env()
     feed_with_checkout(e)
     run(e.agent.sync_calendars())
-    run(e.agent.handle_inbound("telegram", "tg-maria", "yes"))
+    run(e.agent.handle_inbound("tg-maria", "yes"))
     sheets = e.agent.export_schedule()
     assert sheets == read_schedule(e.settings.schedule_xlsx)
     row = sheets["schedule"][0]
@@ -135,7 +137,7 @@ def test_without_gemini_unknown_text_gets_the_help_text():
     e = telegram_env()
     feed_with_checkout(e)
     run(e.agent.sync_calendars())
-    run(e.agent.handle_inbound("telegram", "tg-maria", "hmm maybe"))
+    run(e.agent.handle_inbound("tg-maria", "hmm maybe"))
     assert "didn't understand" in e.messenger.to("tg-maria")[-1]
 
 
@@ -147,7 +149,7 @@ def test_sick_until_friday_stores_dates_and_job_goes_to_next_cleaner():
     feed_with_checkout(e)
     run(e.agent.sync_calendars())
     assert offered_to(e) == ["Maria"]
-    run(e.agent.handle_inbound("telegram", "tg-maria", "I'm ill, can't work until Friday"))
+    run(e.agent.handle_inbound("tg-maria", "I'm ill, can't work until Friday"))
     u = e.db.execute("SELECT * FROM unavailability").fetchone()
     assert (u["from_date"], u["to_date"]) == (TODAY.isoformat(), until)
     assert offered_to(e)[1] != "Maria" and len(offered_to(e)) == 2
@@ -172,8 +174,8 @@ def test_sick_after_accepting_releases_the_job_and_reassigns():
     e = telegram_env(llm)
     feed_with_checkout(e)
     run(e.agent.sync_calendars())
-    run(e.agent.handle_inbound("telegram", "tg-maria", "yes"))
-    run(e.agent.handle_inbound("telegram", "tg-maria", "ugh, flu"))
+    run(e.agent.handle_inbound("tg-maria", "yes"))
+    run(e.agent.handle_inbound("tg-maria", "ugh, flu"))
     j = e.agent.list_jobs()[0]
     assert j["status"] == "offering" and j["cleaner"] is None and j["offered_to"] != "Maria"
 
@@ -183,7 +185,7 @@ def test_free_text_decline_with_gemini_offers_next_cleaner():
     e = telegram_env(llm)
     feed_with_checkout(e)
     run(e.agent.sync_calendars())
-    run(e.agent.handle_inbound("telegram", "tg-maria", "only after 14:00 sorry"))
+    run(e.agent.handle_inbound("tg-maria", "only after 14:00 sorry"))
     assert offered_to(e)[0] == "Maria" and len(offered_to(e)) == 2
     assert e.db.execute("SELECT status FROM offers WHERE id=1").fetchone()[0] == "declined"
 
@@ -192,7 +194,7 @@ def test_llm_error_on_reply_falls_back_to_help_text():
     e = telegram_env(FakeLLM(boom=True))
     feed_with_checkout(e)
     run(e.agent.sync_calendars())
-    run(e.agent.handle_inbound("telegram", "tg-maria", "dunno"))
+    run(e.agent.handle_inbound("tg-maria", "dunno"))
     assert "didn't understand" in e.messenger.to("tg-maria")[-1]
 
 
@@ -201,7 +203,7 @@ def test_invented_job_id_is_ignored():
     e = telegram_env(llm)
     feed_with_checkout(e)
     run(e.agent.sync_calendars())
-    run(e.agent.handle_inbound("telegram", "tg-maria", "sounds fine to me"))  # parse_reply: unknown
+    run(e.agent.handle_inbound("tg-maria", "sounds fine to me"))  # parse_reply: unknown
     assert e.agent.list_jobs()[0]["status"] == "assigned"  # 999 ignored, her single open offer is used
 
 
@@ -241,7 +243,7 @@ def test_gemini_pick_is_offered_only_once():
 
 def test_unreachable_cleaners_are_skipped_when_live():
     e = telegram_env()
-    e.settings.dry_run, e.settings.telegram_bot_token = False, "tok"  # no Twilio: SMS cleaners can't be reached
+    e.settings.dry_run, e.settings.telegram_bot_token = False, "tok"  # only linked Telegram chats can be reached
     feed_with_checkout(e)
     run(e.agent.sync_calendars())
     assert offered_to(e) == ["Maria"]
@@ -254,7 +256,7 @@ def test_linking_retries_unfilled_jobs():
     feed_with_checkout(e)
     run(e.agent.sync_calendars())
     assert e.agent.list_jobs()[0]["status"] == "unfilled"  # nobody reachable yet
-    run(e.agent.handle_inbound("telegram", "tg-new", "6900000001"))
+    run(e.agent.handle_inbound("tg-new", "6900000001"))
     assert e.agent.list_jobs()[0]["status"] == "offering" and offered_to(e) == ["Maria"]
     assert any("YES 1" in b for b in e.messenger.to("tg-new"))
 
@@ -265,10 +267,10 @@ def test_one_tap_link_links_the_chat_and_is_single_use():
     e.db.execute("UPDATE cleaners SET telegram_id=NULL")
     code = e.agent.telegram_link_token(1)
     assert code == e.agent.telegram_link_token(1)  # stable until used
-    run(e.agent.handle_inbound("telegram", "tg-phone", f"/start {code}"))
+    run(e.agent.handle_inbound("tg-phone", f"/start {code}"))
     assert e.db.execute("SELECT telegram_id FROM cleaners WHERE id=1").fetchone()[0] == "tg-phone"
     assert "linked" in e.messenger.to("tg-phone")[0]
-    run(e.agent.handle_inbound("telegram", "tg-stranger", f"/start {code}"))  # forwarded link: dead now
+    run(e.agent.handle_inbound("tg-stranger", f"/start {code}"))  # forwarded link: dead now
     assert e.db.execute("SELECT telegram_id FROM cleaners WHERE id=1").fetchone()[0] == "tg-phone"
     assert "already used" in e.messenger.to("tg-stranger")[0] or "χρησιμοποιηθεί" in e.messenger.to("tg-stranger")[0]
     assert e.agent.telegram_link_token(1) != code  # a fresh one is made on demand
@@ -281,7 +283,7 @@ def test_one_tap_link_moves_cleaner_to_a_new_phone_and_sends_offers():
     e.db.execute("UPDATE cleaners SET telegram_id=NULL")
     run(e.agent.sync_calendars())
     assert e.agent.list_jobs()[0]["status"] == "unfilled"
-    run(e.agent.handle_inbound("telegram", "tg-new", f"/start {e.agent.telegram_link_token(1)}"))
+    run(e.agent.handle_inbound("tg-new", f"/start {e.agent.telegram_link_token(1)}"))
     assert any("YES 1" in b for b in e.messenger.to("tg-new"))
 
 
@@ -357,17 +359,17 @@ def test_ask_for_offers_resends_them_and_lists_confirmed_jobs():
     feed_with_checkout(e)
     run(e.agent.sync_calendars())
     n = len(e.messenger.to("tg-maria"))
-    run(e.agent.handle_inbound("telegram", "tg-maria", "send me the offers please"))
+    run(e.agent.handle_inbound("tg-maria", "send me the offers please"))
     sent = e.messenger.to("tg-maria")[n:]
     assert len(sent) == 1 and "YES 1" in sent[0]  # the real offer again, not Gemini's promise
-    run(e.agent.handle_inbound("telegram", "tg-maria", "yes"))
-    run(e.agent.handle_inbound("telegram", "tg-maria", "what is my programme?"))
+    run(e.agent.handle_inbound("tg-maria", "yes"))
+    run(e.agent.handle_inbound("tg-maria", "what is my programme?"))
     assert any("#1" in b and "Plaka Studio" in b for b in e.messenger.to("tg-maria")[-1:])
 
 
 def test_status_with_nothing_open_says_so():
     e = telegram_env(FakeLLM(reply={"intent": "status"}))
-    run(e.agent.handle_inbound("telegram", "tg-maria", "show my jobs"))
+    run(e.agent.handle_inbound("tg-maria", "show my jobs"))
     assert "no open offers" in e.messenger.to("tg-maria")[-1]
 
 
@@ -385,7 +387,7 @@ def test_one_message_accepts_one_offer_and_refuses_the_rest():
                          "reply_text": "ok"})
     e = _two_jobs_for_maria(llm)
     assert [j["offered_to"] for j in e.agent.list_jobs()] == ["Maria", "Maria"]
-    run(e.agent.handle_inbound("telegram", "tg-maria", "εγώ δεν μπορώ καθόλου, μόνο την 2 μπορώ"))
+    run(e.agent.handle_inbound("tg-maria", "εγώ δεν μπορώ καθόλου, μόνο την 2 μπορώ"))
     jobs_ = {j["id"]: j for j in e.agent.list_jobs()}
     assert jobs_[2]["status"] == "assigned" and jobs_[2]["cleaner"] == "Maria"
     assert jobs_[1]["status"] == "offering" and jobs_[1]["offered_to"] != "Maria"  # next cleaner was asked
@@ -398,14 +400,14 @@ def test_one_message_accepts_one_offer_and_refuses_the_rest():
 def test_batch_answers_ignore_ids_that_are_not_her_open_offers():
     llm = FakeLLM(reply={"intent": "answers", "decisions": [{"job_id": 77, "answer": "yes"}], "decline_rest": False})
     e = _two_jobs_for_maria(llm)
-    run(e.agent.handle_inbound("telegram", "tg-maria", "ναι στην 77"))
+    run(e.agent.handle_inbound("tg-maria", "ναι στην 77"))
     assert all(j["status"] == "offering" and j["offered_to"] == "Maria" for j in e.agent.list_jobs())
 
 
 def test_unmentioned_offers_stay_open_without_decline_rest():
     llm = FakeLLM(reply={"intent": "answers", "decisions": [{"job_id": 1, "answer": "no"}], "decline_rest": False})
     e = _two_jobs_for_maria(llm)
-    run(e.agent.handle_inbound("telegram", "tg-maria", "όχι την 1"))
+    run(e.agent.handle_inbound("tg-maria", "όχι την 1"))
     jobs_ = {j["id"]: j for j in e.agent.list_jobs()}
     assert jobs_[2]["offered_to"] == "Maria" and jobs_[1]["offered_to"] != "Maria"
 
@@ -413,7 +415,7 @@ def test_unmentioned_offers_stay_open_without_decline_rest():
 def test_long_message_with_a_no_is_read_by_gemini_not_by_the_keyword_parser():
     llm = FakeLLM(reply={"intent": "answers", "decisions": [{"job_id": 2, "answer": "yes"}], "decline_rest": True})
     e = _two_jobs_for_maria(llm)
-    run(e.agent.handle_inbound("telegram", "tg-maria", "Μπορώ μόνο για το 2. Όχι στα υπόλοιπα"))
+    run(e.agent.handle_inbound("tg-maria", "Μπορώ μόνο για το 2. Όχι στα υπόλοιπα"))
     assert len(llm.reply_calls) == 1  # used to be caught by "όχι" -> declined job 2, the one she wanted
     jobs_ = {j["id"]: j for j in e.agent.list_jobs()}
     assert jobs_[2]["status"] == "assigned" and jobs_[1]["offered_to"] != "Maria"
@@ -422,8 +424,8 @@ def test_long_message_with_a_no_is_read_by_gemini_not_by_the_keyword_parser():
 def test_short_answers_never_call_gemini():
     llm = FakeLLM()
     e = _two_jobs_for_maria(llm)
-    run(e.agent.handle_inbound("telegram", "tg-maria", "ΝΑΙ 2"))
-    run(e.agent.handle_inbound("telegram", "tg-maria", "όχι 1"))
+    run(e.agent.handle_inbound("tg-maria", "ΝΑΙ 2"))
+    run(e.agent.handle_inbound("tg-maria", "όχι 1"))
     assert llm.reply_calls == []
     assert {j["id"]: j["status"] for j in e.agent.list_jobs()}[2] == "assigned"
 
@@ -431,14 +433,14 @@ def test_short_answers_never_call_gemini():
 def test_can_do_everything_accepts_all_open_offers():
     llm = FakeLLM(reply={"intent": "answers", "decisions": [], "accept_rest": True})
     e = _two_jobs_for_maria(llm)
-    run(e.agent.handle_inbound("telegram", "tg-maria", "μπορώ για όλα"))
+    run(e.agent.handle_inbound("tg-maria", "μπορώ για όλα"))
     assert all(j["status"] == "assigned" and j["cleaner"] == "Maria" for j in e.agent.list_jobs())
 
 
 def test_everything_except_one():
     llm = FakeLLM(reply={"intent": "answers", "decisions": [{"job_id": 1, "answer": "no"}], "accept_rest": True})
     e = _two_jobs_for_maria(llm)
-    run(e.agent.handle_inbound("telegram", "tg-maria", "όλα εκτός από το 1"))
+    run(e.agent.handle_inbound("tg-maria", "όλα εκτός από το 1"))
     jobs_ = {j["id"]: j for j in e.agent.list_jobs()}
     assert jobs_[2]["status"] == "assigned" and jobs_[1]["status"] == "offering" and jobs_[1]["offered_to"] != "Maria"
 
@@ -446,5 +448,5 @@ def test_everything_except_one():
 def test_yes_to_all_is_read_by_gemini_not_ambiguous():
     llm = FakeLLM(reply={"intent": "answers", "decisions": [], "accept_rest": True})
     e = _two_jobs_for_maria(llm)
-    run(e.agent.handle_inbound("telegram", "tg-maria", "ναι για όλα"))
+    run(e.agent.handle_inbound("tg-maria", "ναι για όλα"))
     assert len(llm.reply_calls) == 1 and all(j["status"] == "assigned" for j in e.agent.list_jobs())

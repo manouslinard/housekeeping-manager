@@ -52,6 +52,6 @@ def test_same_cleaner_can_do_two_jobs_a_day_at_different_times(env):
     for pid in ("plaka", "r2"):
         env.feeds[f"airbnb://{pid}"] = ics((pid, out - timedelta(days=2), out, "Reserved"))
     asyncio.run(env.agent.sync_calendars())
-    asyncio.run(env.agent.handle_inbound("sms", "+306900000001", "YES 1"))
-    asyncio.run(env.agent.handle_inbound("sms", "+306900000001", "YES 2"))
+    asyncio.run(env.agent.handle_inbound("+306900000001", "YES 1"))
+    asyncio.run(env.agent.handle_inbound("+306900000001", "YES 2"))
     assert [j["cleaner"] for j in env.agent.list_jobs()] == ["Maria", "Maria"]  # 11:00 and 13:00, same day

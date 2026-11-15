@@ -35,7 +35,7 @@ def test_closest_cleaner_is_asked_first(env):
 def test_decline_moves_to_next_closest(env):
     feed_with_checkout(env)
     run(env.agent.sync_calendars())
-    run(env.agent.handle_inbound("sms", MARIA, "NO 1"))
+    run(env.agent.handle_inbound(MARIA, "NO 1"))
     # Elena (~12 km) is slightly closer than Nikos (~13 km)? compute from the offers instead of assuming
     asked = [r["cleaner_id"] for r in env.db.execute("SELECT cleaner_id FROM offers ORDER BY id")]
     assert len(asked) == 2 and asked[0] != asked[1]
@@ -45,10 +45,10 @@ def test_decline_moves_to_next_closest(env):
 def test_accept_assigns_confirms_and_notifies_owner(env):
     feed_with_checkout(env)
     run(env.agent.sync_calendars())
-    run(env.agent.handle_inbound("sms", MARIA, "yes"))
+    run(env.agent.handle_inbound(MARIA, "yes"))
     assert jobs(env)[0]["status"] == "assigned" and jobs(env)[0]["cleaner"] == "Maria"
     assert any("Confirmed" in b for b in env.messenger.to(MARIA))
-    assert any("Maria confirmed" in b for b in env.messenger.to("+306999999999"))
+    assert any("Maria confirmed" in b for b in env.messenger.to("owner-chat"))
 
 
 def test_timeout_moves_to_next_cleaner(env):
@@ -69,7 +69,7 @@ def test_late_yes_after_expiry_still_accepted_if_nobody_else_has_it(env):
     env.db.execute("UPDATE cleaners SET active=0 WHERE name != 'Maria'")
     run(env.agent.advance())
     assert jobs(env)[0]["status"] == "unfilled"
-    run(env.agent.handle_inbound("sms", MARIA, "YES 1"))
+    run(env.agent.handle_inbound(MARIA, "YES 1"))
     assert jobs(env)[0]["status"] == "assigned"
 
 
@@ -79,9 +79,9 @@ def test_all_decline_marks_unfilled_and_alerts_owner(env):
     for _ in range(3):
         row = env.db.execute("SELECT c.phone FROM offers o JOIN cleaners c ON c.id=o.cleaner_id WHERE o.status='pending'").fetchone()
         assert row is not None
-        run(env.agent.handle_inbound("sms", row["phone"], "no"))
+        run(env.agent.handle_inbound(row["phone"], "no"))
     assert jobs(env)[0]["status"] == "unfilled"
-    assert any("ALERT" in b for b in env.messenger.to("+306999999999"))
+    assert any("ALERT" in b for b in env.messenger.to("owner-chat"))
     # owner fixes the situation and retries
     assert run(env.agent.retry_job(1)) is True
     assert jobs(env)[0]["status"] == "offering"
@@ -90,12 +90,12 @@ def test_all_decline_marks_unfilled_and_alerts_owner(env):
 def test_booking_removed_cancels_job_and_tells_cleaner(env):
     feed_with_checkout(env)
     run(env.agent.sync_calendars())
-    run(env.agent.handle_inbound("sms", MARIA, "YES"))
+    run(env.agent.handle_inbound(MARIA, "YES"))
     env.feeds["airbnb://plaka"] = ics()  # guest cancelled
     run(env.agent.sync_calendars())
     assert jobs(env)[0]["status"] == "cancelled"
     assert any("cancelled" in b for b in env.messenger.to(MARIA))
-    assert any("cancelled" in b for b in env.messenger.to("+306999999999"))
+    assert any("cancelled" in b for b in env.messenger.to("owner-chat"))
 
 
 def test_failed_calendar_download_does_not_cancel_anything(env):
@@ -139,39 +139,40 @@ def test_capacity_limit_skips_busy_cleaner(env):
     run(env.agent.sync_calendars())
     # same day, same time: Maria (closest) gets job 1, job 2 must go to someone else from the start
     assert sum("#2" in b for b in env.messenger.to(MARIA)) == 0
-    run(env.agent.handle_inbound("sms", MARIA, "YES 2"))
+    run(env.agent.handle_inbound(MARIA, "YES 2"))
     assert [j for j in jobs(env) if j["id"] == 2][0]["cleaner"] != "Maria"
 
 
 def test_done_marks_completed(env):
     feed_with_checkout(env)
     run(env.agent.sync_calendars())
-    run(env.agent.handle_inbound("sms", MARIA, "YES"))
-    run(env.agent.handle_inbound("sms", MARIA, "DONE 1"))
+    run(env.agent.handle_inbound(MARIA, "YES"))
+    run(env.agent.handle_inbound(MARIA, "DONE 1"))
     assert jobs(env)[0]["status"] == "completed"
 
 
 def test_reminder_sent_evening_before_once(env):
     feed_with_checkout(env, days_ahead=1)
     run(env.agent.sync_calendars())
-    run(env.agent.handle_inbound("sms", MARIA, "YES"))
+    run(env.agent.handle_inbound(MARIA, "YES"))
     env.set_time(18)
     run(env.agent.send_reminders())
     run(env.agent.send_reminders())
     assert sum("Reminder" in b for b in env.messenger.to(MARIA)) == 1
 
 
-def test_viber_cleaner_is_linked_by_phone_number(env):
-    env.db.execute("UPDATE cleaners SET viber_id=NULL WHERE name='Nikos'")
-    run(env.agent.handle_inbound("viber", "vb-new", "hello"))
-    run(env.agent.handle_inbound("viber", "vb-new", "+30 690 000 0002"))
-    row = env.db.execute("SELECT viber_id FROM cleaners WHERE name='Nikos'").fetchone()
-    assert row["viber_id"] == "vb-new"
+def test_cleaner_is_linked_by_phone_number(env):
+    env.db.execute("UPDATE cleaners SET telegram_id=NULL WHERE name='Nikos'")
+    run(env.agent.handle_inbound("tg-new", "hello"))
+    run(env.agent.handle_inbound("tg-new", "+30 690 000 0002"))
+    row = env.db.execute("SELECT telegram_id FROM cleaners WHERE name='Nikos'").fetchone()
+    assert row["telegram_id"] == "tg-new"
 
 
-def test_unknown_numbers_are_ignored(env):
-    run(env.agent.handle_inbound("sms", "+15550000000", "YES"))
-    assert env.messenger.sent == []
+def test_unknown_chats_only_get_the_link_prompt(env):
+    run(env.agent.handle_inbound("stranger", "YES"))
+    assert [c for c, _, _ in env.messenger.sent] == ["telegram"] and "phone number" in env.messenger.to("stranger")[0]
+    assert env.db.execute("SELECT COUNT(*) FROM jobs WHERE cleaner_id IS NOT NULL").fetchone()[0] == 0
 
 
 def test_send_failure_falls_through_to_next_cleaner(env):
@@ -186,8 +187,8 @@ def test_send_failure_falls_through_to_next_cleaner(env):
 def test_sync_survives_a_completed_job_on_a_future_day(env):
     feed_with_checkout(env)
     run(env.agent.sync_calendars())
-    run(env.agent.handle_inbound("sms", MARIA, "yes"))
-    run(env.agent.handle_inbound("sms", MARIA, "done 1"))  # finished early: status completed, day is still in the future
+    run(env.agent.handle_inbound(MARIA, "yes"))
+    run(env.agent.handle_inbound(MARIA, "done 1"))  # finished early: status completed, day is still in the future
     assert jobs(env)[0]["status"] == "completed"
     run(env.agent.sync_calendars())  # used to crash: UNIQUE constraint failed: jobs.property_id, jobs.checkout_date
     assert [j["status"] for j in jobs(env)] == ["completed"]

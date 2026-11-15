@@ -51,17 +51,11 @@ class Settings:
     skip_sunday: bool = True         # Sunday checkouts are cleaned on Monday (unless a guest arrives that Sunday)
     ignore_airbnb_blocks: bool = True  # "Airbnb (Not available)" = owner block, not a guest
 
-    owner_phone: str = ""            # gets alerts (unfilled / cancelled / done)
-    owner_channel: str = "sms"
+    owner_chat_id: str = ""          # Telegram chat id of the owner: gets alerts (unfilled / cancelled / done)
     owner_language: str = "en"
 
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_from: str = ""
-    viber_auth_token: str = ""
-    viber_sender_name: str = "Cleaning"
 
-    public_base_url: str = ""        # e.g. https://cleaning.example.com (used to verify Twilio signatures)
+    public_base_url: str = ""        # e.g. https://cleaning.example.com (used to register the Telegram webhook)
     verify_webhooks: bool = True
     admin_token: str = ""
     telegram_bot_token: str = ""
@@ -80,8 +74,6 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        twilio_token = _s("TWILIO_AUTH_TOKEN")
-        viber_token = _s("VIBER_AUTH_TOKEN")
         telegram_token = _s("TELEGRAM_BOT_TOKEN")
         return cls(
             db_path=_s("DB_PATH", "data/agent.db"),
@@ -105,14 +97,8 @@ class Settings:
             default_checkout_time=_s("DEFAULT_CHECKOUT_TIME", "11:00"),
             skip_sunday=_b("SKIP_SUNDAY", True),
             ignore_airbnb_blocks=_b("IGNORE_AIRBNB_BLOCKS", True),
-            owner_phone=_s("OWNER_PHONE"),
-            owner_channel=_s("OWNER_CHANNEL", "sms"),
+            owner_chat_id=_s("OWNER_TELEGRAM_CHAT_ID"),
             owner_language=_s("OWNER_LANGUAGE", "en"),
-            twilio_account_sid=_s("TWILIO_ACCOUNT_SID"),
-            twilio_auth_token=twilio_token,
-            twilio_from=_s("TWILIO_FROM"),
-            viber_auth_token=viber_token,
-            viber_sender_name=_s("VIBER_SENDER_NAME", "Cleaning"),
             public_base_url=_s("PUBLIC_BASE_URL").rstrip("/"),
             verify_webhooks=_b("VERIFY_WEBHOOKS", True),
             admin_token=_s("ADMIN_TOKEN"),
@@ -128,5 +114,5 @@ class Settings:
             gemini_model=_s("GEMINI_MODEL", "gemini-flash-latest"),
             llm_enabled=_b("LLM_ENABLED", True),
             schedule_xlsx=_s("SCHEDULE_XLSX", "data/cleaner_schedules.xlsx"),
-            dry_run=_b("DRY_RUN", not (twilio_token or viber_token or telegram_token)),
+            dry_run=_b("DRY_RUN", not telegram_token),
         )

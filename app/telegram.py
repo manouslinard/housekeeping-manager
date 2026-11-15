@@ -60,7 +60,7 @@ async def poll_forever(agent, token: str) -> None:
 async def _safe_handle(agent, msg: dict) -> None:
     try:
         # a shared contact arrives without text: its phone number is what links the chat
-        await agent.handle_inbound("telegram", msg["chat_id"], msg["text"] or msg["contact_phone"])
+        await agent.handle_inbound(msg["chat_id"], msg["text"] or msg["contact_phone"])
     except Exception:
         log.exception("failed to handle Telegram message")
 

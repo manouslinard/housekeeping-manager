@@ -84,7 +84,7 @@ Telegram bots can't message a phone number, so each cleaner must press **Start**
 | `app/agent.py` | the scheduling brain: jobs, offers, replies, re-planning |
 | `app/llm.py` | Gemini client (structured JSON output) |
 | `app/telegram.py` | receive messages (polling / webhook), bot username |
-| `app/messaging.py` | send via Telegram; dry-run mode. SMS (Twilio) and Viber code exists but is switched off: Telegram is the only channel offered |
+| `app/messaging.py` | send on Telegram; dry-run mode |
 | `app/schedule_xlsx.py` | per-cleaner programme as Excel |
 | `app/mailer.py` | email (Gmail SMTP) for the one-tap link |
 | `app/api.py`, `static/index.html` | web UI and its API |
@@ -114,6 +114,7 @@ pytest                            # 73 tests, no network
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | from @BotFather (`/newbot`). Without a webhook secret the app long-polls, so no public URL is needed |
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | Google AI Studio key. Empty = no AI, fixed `YES/NO` words |
+| `OWNER_TELEGRAM_CHAT_ID` | optional: the owner's Telegram chat id (message the bot, then look at `GET /messages`). Gets alerts: job unfilled, cancelled, done |
 | `ADMIN_TOKEN` | password the web page asks for once (required when real messaging is on) |
 | `SMTP_USER`, `SMTP_PASSWORD` | Gmail address + an **App Password** (Google Account → Security → 2-Step Verification → App passwords) for the link emails |
 | `TELEGRAM_WEBHOOK_SECRET`, `PUBLIC_BASE_URL` | optional: use the webhook instead of polling |
@@ -141,7 +142,7 @@ Without credentials the app runs in **dry-run**: messages are printed in the ser
 - Offers are sent to one cleaner at a time (30 min each) to keep the work fair; a "send to several at once" mode would be faster.
 - "Only after 14:00" is treated as a decline of that job, not as a time constraint to renegotiate.
 - `/job/{id}` is a prototype page with fixed text; next step: fill it from the database and link it from the Telegram offer.
-- Telegram is the only channel for now (SMS / Viber are disabled in the UI to keep things simple).
+- Telegram is the only channel (no SMS / Viber), so a cleaner must press Start in the bot once.
 - The web UI is in Greek; the cleaners are called the **Ομάδα Καθαρισμού** (cleaning team).
 
 ## Tests

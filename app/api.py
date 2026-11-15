@@ -20,7 +20,6 @@ class CleanerIn(BaseModel):
     name: str
     phone: str
     address: str
-    channel: str = "telegram"     # ignored: Telegram is the only channel for now
     email: str = ""               # the one-tap Telegram link is emailed here
 
 
@@ -144,7 +143,7 @@ def make_router(admin) -> APIRouter:
         rows = lambda sql: [dict(x) for x in a.q(sql)]  # noqa: E731
         return {
             "rooms": rows("SELECT id, name, address, hotel, room, checkout_time FROM properties ORDER BY COALESCE(hotel, name), CAST(room AS INTEGER), room"),
-            "cleaners": rows("SELECT id, name, phone, address, channel, email, max_jobs_per_day, telegram_id IS NOT NULL AS linked FROM cleaners WHERE active=1 ORDER BY name"),
+            "cleaners": rows("SELECT id, name, phone, address, email, max_jobs_per_day, telegram_id IS NOT NULL AS linked FROM cleaners WHERE active=1 ORDER BY name"),
             "bookings": rows("SELECT * FROM bookings ORDER BY checkin_date"),
             "jobs": [j for j in a.list_jobs() if j["status"] != "cancelled"],
             "today": a.now().date().isoformat(),
@@ -165,7 +164,7 @@ def make_router(admin) -> APIRouter:
         a.x(
             """INSERT INTO cleaners(name, phone, lat, lon, address, channel, email, active, max_jobs_per_day) VALUES (?,?,?,?,?,?,NULLIF(?,''),1,?)
                ON CONFLICT(phone) DO UPDATE SET name=excluded.name, lat=excluded.lat, lon=excluded.lon,
-                 address=excluded.address, channel=excluded.channel, email=excluded.email, active=1""",
+                 address=excluded.address, email=excluded.email, active=1""",
             (body.name.strip(), phone, *pos, body.address, "telegram",
              email, a.s.default_max_jobs_per_day),
         )

@@ -3,8 +3,7 @@
     python reset_demo.py          # wipe everything, then load demo cleaners, a hotel, rooms and bookings
     python reset_demo.py --empty  # wipe everything, load nothing
 
-Safe to run while the server is up. Refuses to run when real messaging is configured (Twilio/Viber),
-because the demo cleaners have fake phone numbers; use --force to override.
+Safe to run while the server is up. Cleaners who already linked their Telegram chat keep the link.
 """
 from __future__ import annotations
 
@@ -48,14 +47,11 @@ def seed_bookings(db, today: date, rooms: int = ROOMS) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--empty", action="store_true", help="wipe only, no demo data")
-    ap.add_argument("--force", action="store_true", help="run even when Twilio/Viber are configured")
     args = ap.parse_args()
     s = Settings.from_env()
-    if (s.twilio_auth_token or s.viber_auth_token) and not args.force:
-        raise SystemExit("Real messaging is configured (DRY_RUN is off). Refusing; pass --force if you really mean it.")
 
     db = connect(s.db_path)
-    links = db.execute("SELECT phone, viber_id, telegram_id FROM cleaners WHERE viber_id IS NOT NULL OR telegram_id IS NOT NULL").fetchall()
+    links = db.execute("SELECT phone, telegram_id FROM cleaners WHERE telegram_id IS NOT NULL").fetchall()
     for table in ("unavailability", "offers", "jobs", "bookings", "calendars", "properties", "cleaners", "messages"):
         db.execute(f"DELETE FROM {table}")
     print("wiped", s.db_path)
@@ -64,8 +60,7 @@ def main() -> None:
 
     asyncio.run(load_cleaners(db, s.cleaners_csv, s))  # demo cleaners live in data/cleaners.csv
     for r in links:  # keep chats that were already linked to the bot
-        db.execute("UPDATE cleaners SET viber_id=COALESCE(?, viber_id), telegram_id=COALESCE(?, telegram_id) WHERE phone=?",
-                   (r["viber_id"], r["telegram_id"], r["phone"]))
+        db.execute("UPDATE cleaners SET telegram_id=? WHERE phone=?", (r["telegram_id"], r["phone"]))
     for room in range(1, ROOMS + 1):
         db.execute(
             "INSERT INTO properties(id, name, address, lat, lon, checkout_time, hotel, room) VALUES (?,?,?,?,?,?,?,?)",
