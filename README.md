@@ -1,182 +1,148 @@
 # Housekeeping Manager
 
-Hotel owners enter rooms and bookings (form or Excel). The app creates **cleaning jobs** (on every checkout day, and every 3 days during a stay) and offers each job to a **cleaner**, nearest first. A web page shows the plan.
+**Hotel cleaning that organises itself.** Enter your bookings; the app creates the cleaning jobs, offers them to the right cleaners on **Telegram**, and an **AI agent (Gemini)** reads their replies in plain Greek or English and re-plans when somebody can't come.
 
-```bash
-pip install -r requirements.txt
-python reset_demo.py              # demo cleaners, a small hotel, bookings (--empty = just wipe)
-uvicorn app.main:app --port 8000  # UI at http://localhost:8000
-pytest                            # must stay green
-```
+> "I can't do any, only room 4." · "I'm sick until Friday." · "All of them except 6." — the cleaner just writes, the schedule fixes itself.
 
-Without credentials the app runs in **dry-run**: messages are printed in the server log, not sent.
+## The problem
 
-## What exists / what is missing
+A small hotel or a host with several apartments plans cleanings by hand: check the bookings, text each cleaner, wait for answers, call the next one, update the sheet. A single sick cleaner means an hour of phone calls. Rigid chatbots ("reply YES 12") don't fit how people actually write.
 
-| | |
-|---|---|
-| Web UI, bookings, Excel import, job generation, nearest-cleaner offers over SMS/Viber | done |
-| **Part 1: Telegram channel** (`app/telegram.py`, webhook or long polling, link by phone number) | done |
-| **Part 2: Gemini agent** (`app/llm.py`: `interpret_reply`, `choose_cleaner`) | done |
-| **Per-cleaner Excel** (`app/schedule_xlsx.py`, `data/cleaner_schedules.xlsx`, rebuilt from the DB, read by Gemini) | done |
+## What it does
 
-The cleaner is chosen by a fixed cost function (below); Gemini, when a key is set, may reorder the candidates, and always falls back to that order. See `.env.example` for the settings.
+1. **Bookings in** — add a stay in the web page, or import an Excel file.
+2. **Jobs out** — the app creates a cleaning on every checkout day, plus a mid-stay cleaning every 3 nights. No cleaning on Sundays (moved to Monday, unless a guest arrives).
+3. **Smart offers** — each job is offered on Telegram to the best cleaner: close to the hotel, not overloaded, and free at that time.
+4. **Natural replies** — the cleaner answers however she likes. Gemini understands it and the system acts:
 
-## The whole flow (target design)
+   | She writes | What happens |
+   |---|---|
+   | `ΝΑΙ 12` / `no 7` | fast path, no AI needed |
+   | "μπορώ μόνο για το 4. όχι στα υπόλοιπα" | job 4 accepted, the others declined and re-offered to the next cleaners |
+   | "μπορώ για όλα εκτός από το 6" | everything accepted except job 6 |
+   | "μόνο την Τρίτη μπορώ" | Gemini maps the day to the right job |
+   | "είμαι άρρωστη μέχρι την Παρασκευή" | she is marked unavailable for those dates, her jobs go to other cleaners, she gets no offers meanwhile |
+   | "στείλε μου τις προσφορές" / "τι δουλειές έχω;" | she gets her open offers and confirmed jobs |
 
-1. A booking creates cleaning jobs:
-   - **checkout cleaning** 🧹 on the checkout day, at the checkout time;
-   - **mid-stay cleaning** ✨ every `STAY_CLEAN_EVERY_DAYS` (3) nights while the guest is still in, at `STAY_CLEAN_TIME` (13:00). Example: a 7-night stay gets mid-stay cleanings after night 3 and night 6, then the checkout cleaning on day 7. A mid-stay day on Sunday moves to Monday (dropped if Monday is already the checkout).
-   - No cleaning on Sundays: it moves to Monday (`SKIP_SUNDAY`), unless a new guest arrives that Sunday.
-2. The app picks the nearest available cleaner and **sends her the proposed slot on Telegram** ("room 5, Tue 17/11 from 11:00, 1.2 km from you").
-3. The cleaner **replies on Telegram**, in her own words ("yes", "I can't, I'm sick", "only after 14:00").
-4. **Gemini reads the reply** and decides what happens next:
-   - she accepts → the job is `assigned`, Gemini tells her on Telegram that it is settled;
-   - she declines or can't → Gemini looks at the availability and distance of the **other cleaners**, offers the job to the best one (on Telegram), and tells the first cleaner "OK, thanks, we'll arrange it";
-   - nobody can → the job turns red (`unfilled`) and the owner is alerted.
-5. The owner sees all of this live on the web page, without doing anything.
+5. **Re-planning** — when someone declines, Gemini looks at every other cleaner's **programme** and picks the best replacement (see below). Nobody can? The job turns red and the owner is alerted.
+6. **Live board** — the owner watches all of it on the web page, with nothing to do.
 
-Telegram is the pipe (Part 1); Gemini is the brain that reads replies and re-plans (Part 2). Today steps 2-4 work over SMS/Viber with fixed YES/NO words and no Gemini.
+## Where AI is used (and where it is not)
 
-## Job status (what both parts need to know)
+Gemini is the brain for **language and judgement**; plain code is the safety net.
 
-```
-pending ─offer sent─► offering ─cleaner says YES─► assigned ─DONE─► completed
-   ▲                     │ NO or no answer in 30 min
-   └─────────────────────┘ (next cleaner is asked)      nobody left ─► unfilled
-```
+- **Reads free text** (`interpret_reply`): turns a message into decisions per offer: accept, decline, "the rest", unavailable dates, or "show me my jobs".
+- **Chooses the replacement** (`choose_cleaner`): among the cleaners that already pass every hard rule, it prefers one who works in the *same hotel* that day, avoids piling jobs on one person, and looks at gaps in her day.
+- **It can only choose from what the code gives it.** Every job id and cleaner id it returns is validated; invented ones are ignored. It never talks to Telegram itself, and it cannot send or change anything.
+- **The app works without Gemini.** No key, no network or a bad answer = the deterministic behaviour below (nearest cleaner, fixed `YES/NO/DONE` words).
+- Gemini has **no memory** between messages. Each call gets the message plus the cleaner's current offers and schedule, nothing else.
 
-## How a cleaner is chosen (deterministic)
+### The programme per cleaner, as Excel
 
-For each job, every active cleaner gets a cost; the **lowest cost is asked first**, then the next if she says no.
+After every change the app rewrites **`data/cleaner_schedules.xlsx`** from the database: sheets `Cleaners`, `Schedule` (one row per job a cleaner holds or was offered, with start/end/km), `Open jobs`, and one sheet per cleaner. The database stays the source of truth; the workbook is read back and given to Gemini as context, and the owner can open it in Excel.
+
+## How a cleaner is picked (deterministic baseline)
+
+For each job every active cleaner gets a cost, and the lowest is asked first:
 
 ```
 cost = d × (1 + n) + P × n
 ```
 
-- `d` = distance in km from the cleaner's home to the hotel (straight line)
-- `n` = upcoming jobs she already holds (accepted, or offered and not yet answered)
-- `P` = load penalty, default 3 km (`LOAD_PENALTY_KM`)
+`d` = km from her home to the hotel, `n` = jobs she already holds (accepted or offered), `P` = load penalty (3 km). Nobody busy → the nearest goes first; every job adds `P + d`, so work **rotates** among nearby cleaners and a far cleaner is not used twice in a row.
 
-What it does:
+**Hard rules** (skipped whatever the cost): two jobs less than 60 min apart, more than `max_jobs_per_day`, already declined this job, away on that date (`unavailability`), or no way to reach her (e.g. not yet linked on Telegram). Gemini picks only among cleaners who pass these.
 
-- Nobody busy (`n = 0`) → cost = distance, so the **nearest goes first**.
-- Each job she takes adds `P + d` to her cost, so a near cleaner gets about +3-4 per job and the work **rotates** among the nearby cleaners instead of all going to the closest one.
-- A **far** cleaner is only used when the near ones are loaded, and after one job her cost jumps by her (large) distance, so she is **not used again** soon.
+Code: `assignment_cost`, `Agent._candidates`, `Agent._clash`, `Agent._llm_pick` in `app/agent.py`.
 
-Example (hotel in Plaka): Maria 0.6 km, Gianna 1.0 km, Nikos 13 km.
+## Onboarding a cleaner in one tap
 
-| | Maria | Gianna | Nikos |
-|---|---|---|---|
-| 0 jobs | 0.6 | 1.0 | 13 |
-| 1 job | 0.6·2 + 3 = 4.2 | 1.0·2 + 3 = 5 | 13·2 + 3 = 29 |
+Telegram bots can't message a phone number, so each cleaner must press **Start** once. To make this painless:
 
-**Hard rules** (a cleaner is skipped, whatever her cost):
+- Each cleaner card has **🔗 Telegram**: a personal one-time link `t.me/<bot>?start=<code>`, with QR code, copy and share buttons.
+- Or **✉ send by email**: she gets a Greek/English email with a big "Open in Telegram" button (Gmail SMTP). New cleaners with an email get it automatically.
+- She taps, presses Start, and she is linked, and her waiting offers arrive immediately. The code works once, so a forwarded link is useless.
 
-- she can't take two jobs that start less than `CLEANING_MIN` (60 min) apart on the same day: nobody is in two rooms at once. **Several jobs on the same day at different times are fine** (e.g. a checkout at 11:00 and a mid-stay cleaning at 13:00);
-- at most `max_jobs_per_day` jobs per day (per cleaner, in the cleaners list);
-- farther than `MAX_DISTANCE_KM` (off by default);
-- already declined or ignored this job.
+## Architecture
 
-Code: `assignment_cost`, `Agent._candidates` and `Agent._clash` in `app/agent.py`. The same rules are checked again when she answers YES. Tests: `tests/test_assignment.py`.
+```
+ Web page (static/index.html)            Owner: bookings, Excel import, cleaners, live board
+        │  /api/*
+        ▼
+ FastAPI ── Agent (app/agent.py) ── SQLite (data/agent.db)
+              │      │   ▲
+              │      │   └── cleaner_schedules.xlsx (rebuilt from the DB, read by Gemini)
+              │      └────── Gemini (app/llm.py): read replies, choose replacement
+              ▼
+        Messenger (app/messaging.py) ──► Telegram Bot API   (also SMS / Viber)
+              ▲
+ Telegram ────┘  long polling (no public URL) or POST /webhooks/telegram (secret token)
+```
 
-## Where the "who was asked / who took it" data lives (SQLite `data/agent.db`)
-
-- `jobs`: one row per cleaning (`property_id`, `checkout_date` = the cleaning day, `checkout_time` = its start, `kind` = `checkout` | `stay`, `status`). `cleaner_id` is set **only once someone accepts**.
-- `offers`: one row per message asking one cleaner about one job: `job_id`, `cleaner_id`, `status` (`pending|accepted|declined|expired|cancelled|failed`), `distance_km`, `sent_at`, `expires_at`. The full history of who was asked and what they said is here. Gemini (Part 2) can read it as context.
-- `messages`: every text in and out (`direction`, `party`, `body`, `job_id`). Also `GET /messages`.
-- `GET /api/state` → `jobs[]` already joins this for the UI: `cleaner` (accepted), `offered_to` / `offered_km` (asked now), `queued: true` when nobody has been asked yet and `offered_to` is just the nearest cleaner who would be asked first.
-
-A job stays unasked (`pending`) outside offer hours (21:00-08:00) or while checkout is more than 14 days away.
-
-## The web page (for the team and for demos)
-
-One file, `static/index.html`, served at `/`.
-
-- **Center: the schedule.** Rooms are rows (grouped by hotel), days are columns. The dropdown on the top left switches between **Day** view (one column per day) and **Hour** view (one column per hour of a single day). Light-blue cells are guest stays (name shown, bold edge on the check-in day); click one for details or to delete it.
-- **Chips** mark each cleaning: **🧹** on the checkout day (room empties), **✨** for a mid-stay cleaning every 3 days (guest still in). Sundays move to Monday unless a guest arrives. The colour says where the job stands:
-
-  | Chip | Meaning |
-  |---|---|
-  | 🟧 **Ζητήθηκε** (orange) | The job still needs an answer. Chip shows the cleaner who was asked; with ⏳ it is only queued (that cleaner will be asked next, nothing sent yet, e.g. at night). Hover for distance. |
-  | 🟩 **Ανατέθηκε** (green) | A cleaner said yes. The chip shows her name. (A finished job also stays green.) |
-  | 🟥 **Δεν βρέθηκε** (red) | Every cleaner declined or didn't answer. The owner must act (add a cleaner, or retry). |
-
-- **Top right: actions.** **+ Κράτηση** (add a booking: room, check-in/out date and time), **⇪ Excel** (import bookings; rows overlapping an existing booking of the same room are skipped), **+ Καθαρίστρια** (name, phone for Telegram, address; the address is used to compute distances), **+ Ξενοδοχείο** (hotel name, address and its room numbers, e.g. `1-16`).
-- **Below the schedule: cleaner cards.** Name, phone, address, channel, daily limit, and the jobs assigned to her in the coming days.
-- Deleting: ✕ on a hotel row (removes its rooms and bookings), ✕ on a cleaner card, or click a booking and delete it.
-- The page refreshes itself every 30 seconds. It is a plain HTML/JS page with no build step; its data comes from `/api/*` (see `app/api.py`).
-
-Entry point for any incoming cleaner message, whatever the channel: **`Agent.handle_inbound(channel, sender, text)`**. Entry point for any outgoing message: **`Messenger.send(Recipient, body, job_id)`** in `app/messaging.py`.
-
-Tests: use the `Env` fixture in `tests/conftest.py` (fake clock, fake messenger, no network). Never call real APIs in tests.
-
----
-
-# Part 1: Telegram channel
-
-Owner of: `app/messaging.py`, `app/main.py` (webhook), `app/db.py`, `app/config.py`.
-Goal: cleaners get offers and answer YES/NO/DONE on Telegram instead of SMS.
-
-Telegram bots cannot message a phone number: the cleaner must open the bot and press Start first, then send their phone number once so we can link the chat (same as the existing Viber flow, copy it).
-
-**Endpoint to listen on**
-
-| Endpoint | From | What it does |
-|---|---|---|
-| `POST /webhooks/telegram` | Telegram | check header `X-Telegram-Bot-Api-Secret-Token`, read `message.chat.id` + `message.text`, call `agent.handle_inbound("telegram", str(chat_id), text)` in a background task, return 200 |
-
-Register it once with Bot API `setWebhook` (`url`, `secret_token`).
-
-**Telegram API to call**
-
-| Call | When |
+| File | Role |
 |---|---|
-| `POST https://api.telegram.org/bot<TOKEN>/sendMessage` `{chat_id, text}` | new `telegram` branch in `Messenger.send`; if the cleaner has no `telegram_id` yet, fall back to SMS |
+| `app/agent.py` | the scheduling brain: jobs, offers, replies, re-planning |
+| `app/llm.py` | Gemini client (structured JSON output) |
+| `app/telegram.py` | receive messages (polling / webhook), bot username |
+| `app/messaging.py` | send via Telegram, SMS (Twilio), Viber; dry-run mode |
+| `app/schedule_xlsx.py` | per-cleaner programme as Excel |
+| `app/mailer.py` | email (Gmail SMTP) for the one-tap link |
+| `app/api.py`, `static/index.html` | web UI and its API |
 
-**To change**
+Job status flow:
 
-1. `cleaners` table: add `telegram_id TEXT` (use the `ALTER TABLE` pattern already in `db.py`); allow `channel='telegram'` (`app/loaders.py` only accepts `sms|viber`).
-2. `Recipient`: add `telegram_id`.
-3. `Agent._inbound`: add a `telegram` branch like `viber`: unknown chat → `_link_telegram` (match the phone number sent, save `telegram_id`, reply with the `linked` template).
-4. Env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` (`config.py`, `.env.example`).
-5. UI: the add-cleaner form has no channel field (`static/index.html`, `CleanerIn` in `app/api.py`). Add a channel select.
-6. Tests: dry-run send, link flow, webhook secret accepted/rejected.
+```
+pending ─offer sent─► offering ─cleaner accepts─► assigned ─DONE─► completed
+   ▲                     │ declines / no answer in 30 min
+   └─────────────────────┘ (next cleaner is asked)      nobody left ─► unfilled
+```
 
-Do not touch `app/llm.py` (Part 2).
+## Run it
 
----
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env              # fill in the keys below (all optional: without them it runs in dry-run)
+python reset_demo.py              # demo: 5 cleaners, a 3-room hotel, bookings for the next 10 days
+uvicorn app.main:app --env-file .env --port 8100   # UI at http://localhost:8100
+pytest                            # 73 tests, no network
+```
 
-# Part 2: Gemini agent
+`reset_demo.py` keeps cleaners' Telegram links, so you don't have to relink after a reset. Start the server first if you want it to create the jobs immediately.
 
-Owner of: new `app/llm.py` + two small hooks in `app/agent.py`.
-Goal: understand free-text replies ("I can't do those hours, I'm sick") and choose the best cleaner, starting from distance.
+| `.env` | What for |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | from @BotFather (`/newbot`). Without a webhook secret the app long-polls, so no public URL is needed |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | Google AI Studio key. Empty = no AI, fixed `YES/NO` words |
+| `ADMIN_TOKEN` | password the web page asks for once (required when real messaging is on) |
+| `SMTP_USER`, `SMTP_PASSWORD` | Gmail address + an **App Password** (Google Account → Security → 2-Step Verification → App passwords) for the link emails |
+| `TELEGRAM_WEBHOOK_SECRET`, `PUBLIC_BASE_URL` | optional: use the webhook instead of polling |
 
-Gemini never talks to Telegram directly: every message it writes goes out through `Messenger.send`, so Part 1 delivers it. Both the "OK, it's arranged" reply to the first cleaner and the new offer to the next cleaner are sent that way.
+Without credentials the app runs in **dry-run**: messages are printed in the server log, nothing is sent. Offers go out between 08:00 and 21:00 (Athens) only.
 
-Rules: Gemini only chooses among options our code gives it, and code validates the answer. If there is no key, the call fails or the answer is invalid, fall back to today's behaviour. The app must work without Gemini.
+## Demo script (3 minutes)
 
-**External API to call**
+1. Open the board: rooms × days, 🧹 checkout and ✨ mid-stay cleanings, orange chips = waiting for an answer.
+2. **🔗 Telegram** on a cleaner → send the link (email or QR) → she taps Start → her offers arrive.
+3. Reply "ναι 4". The chip turns green, the owner sees it live.
+4. Reply "μπορώ μόνο για το 5. όχι στα υπόλοιπα": one message, five decisions, and the declined jobs are offered to the next cleaners.
+5. Reply "είμαι άρρωστη μέχρι την Παρασκευή": her jobs move to other cleaners, and she is skipped meanwhile.
+6. Ask "τι δουλειές έχω;": the bot lists her jobs.
+7. Open `data/cleaner_schedules.xlsx`: the programme per cleaner that Gemini reasons over.
 
-Gemini API (`generateContent`) with JSON-schema structured output. Env: `GEMINI_API_KEY`, `GEMINI_MODEL` (don't hardcode), `LLM_ENABLED`.
+## Data (SQLite `data/agent.db`)
 
-**Two functions to implement in `app/llm.py`**
+`jobs` (one cleaning each, `cleaner_id` set only when someone accepts) · `offers` (who was asked, what they said, distance) · `messages` (every text in and out) · `unavailability` (dates a cleaner is away) · `cleaners` (incl. `telegram_id`, `email`) · `properties`, `bookings`. `GET /api/state` joins this for the page.
 
-1. `interpret_reply(text, context) -> dict`, called from `Agent._inbound` when `parse_reply` returns `unknown`.
-   - `context`: the cleaner (name, language), her open offers (job id, room, date, time), her upcoming jobs.
-   - Returns `{"intent": "yes|no|done|unavailable|other", "job_id": int|null, "unavailable_from": "YYYY-MM-DD"|null, "unavailable_to": "YYYY-MM-DD"|null, "reply_text": str}`.
-   - `yes` / `no` / `done` → call the existing `_answer_offer` / `_mark_done`. `unavailable` → store the dates (new table `unavailability(cleaner_id, from_date, to_date, reason)`), decline her affected offers, send `reply_text` in her language.
-2. `choose_cleaner(job, candidates, context) -> int | None`, called from `Agent._offer_next` after it builds `candidates` (already filtered by the hard rules and sorted by the cost above).
-   - Each candidate: id, name, km, jobs already that day, `max_jobs_per_day`.
-   - `context`: the job (room, hotel, date, time, same-day turnover?) and the other jobs of that hotel that day, so one cleaner can take neighbouring rooms.
-   - Returns one candidate id; anything not in `candidates` is ignored and the nearest is used.
+## Limits and next steps
 
-`_offer_next` must also skip cleaners inside an `unavailability` range, with or without Gemini.
+- One owner, one SQLite file, one server process: enough for a hotel, not a platform.
+- Distances are straight-line (haversine), not travel time.
+- Offers are sent to one cleaner at a time (30 min each) to keep the work fair; a "send to several at once" mode would be faster.
+- "Only after 14:00" is treated as a decline of that job, not as a time constraint to renegotiate.
+- `/job/{id}` is a prototype page with fixed text; next step: fill it from the database and link it from the Telegram offer.
+- The web UI is in Greek.
 
-**Internal endpoints useful while building**
+## Tests
 
-`GET /jobs` (all jobs with status and cleaner), `GET /messages` (message log), `POST /admin/sync` (rebuild jobs from bookings), `POST /jobs/{id}/retry` (new offer round for an unfilled job). Header `X-Admin-Token` when `ADMIN_TOKEN` is set.
-
-**Tests:** inject a fake LLM client. Cover: invalid id → nearest cleaner; API exception → fallback; "I'm sick until Friday" → dates stored and the job goes to the next cleaner.
-
-Do not touch `app/messaging.py` (Part 1).
+`pytest` runs 73 tests with a fake clock, fake messenger and fake Gemini: the offer rotation, the Telegram link flow, webhook secrets, every Gemini case above (invalid ids, API errors, batch answers, "all except 6") and the fallbacks. Never call real APIs in tests.
