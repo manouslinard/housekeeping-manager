@@ -4,6 +4,7 @@
 
 * [Youtube Video Showcase](https://youtu.be/UHstZ5xnI7Y)
 
+
 **Hotel cleaning that organises itself.** Enter your bookings; the app creates the cleaning jobs, offers them to the right cleaners on **Telegram**, and an **AI agent (Gemini)** reads their replies in plain Greek or English and re-plans when somebody can't come.
 
 > "I can't do any, only room 4." · "I'm sick until Friday." · "All of them except 6." — the cleaner just writes, the schedule fixes itself.
