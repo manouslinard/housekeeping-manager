@@ -257,6 +257,18 @@ class Agent:
         start = _mins(job["checkout_time"])
         return len(day) >= cleaner["max_jobs_per_day"] or any(abs(m - start) < self.s.cleaning_min for m in day)
 
+    def _reachable(self, c) -> bool:
+        """Can a message actually get to her? (Telegram/Viber fall back to SMS until she links the chat.)
+        Unreachable cleaners are skipped instead of burning the job with failed offers."""
+        s = self.s
+        if s.dry_run:
+            return True
+        if c["channel"] == "telegram" and c["telegram_id"] and s.telegram_bot_token:
+            return True
+        if c["channel"] == "viber" and c["viber_id"] and s.viber_auth_token:
+            return True
+        return bool(s.twilio_account_sid and s.twilio_auth_token and s.twilio_from)
+
     def _away(self, cleaner_id: int, day: str) -> bool:
         return self.q1(
             "SELECT 1 FROM unavailability WHERE cleaner_id=? AND from_date<=? AND to_date>=?", (cleaner_id, day, day)
@@ -276,7 +288,7 @@ class Agent:
         held = self._held()
         scored = []
         for c in self.q("SELECT * FROM cleaners WHERE active=1"):
-            if c["id"] in excluded or self._away(c["id"], job["checkout_date"]):
+            if c["id"] in excluded or self._away(c["id"], job["checkout_date"]) or not self._reachable(c):
                 continue
             slots = held.get(c["id"], []) + (planned or {}).get(c["id"], [])
             if self._clash(c, job, slots):
@@ -329,7 +341,7 @@ class Agent:
         if pick is None:
             log.warning("Gemini returned %r, not a candidate; using the nearest cleaner", chosen)
             return candidates
-        return [pick] + [x for x in candidates if x is not pick]
+        return [pick] + [x for x in candidates if x[1]["id"] != chosen]
 
     async def _offer_next(self, job) -> None:
         prop = self.q1("SELECT * FROM properties WHERE id=?", (job["property_id"],))
@@ -412,6 +424,9 @@ class Agent:
                     await self.messenger.send(rcpt, t(cleaner["language"], "linked", name=cleaner["name"]))
                 except SendError as exc:
                     log.error("%s link reply failed: %s", channel, exc)
+                self.x("UPDATE offers SET status='retired' WHERE cleaner_id=? AND status='failed'", (cleaner["id"],))
+                self.x("UPDATE jobs SET status='pending', updated_at=? WHERE status='unfilled'", (iso(self.now()),))
+                await self._advance()
                 return
         try:
             await self.messenger.send(rcpt, t("en", "link_prompt"))

@@ -230,3 +230,30 @@ def test_choose_cleaner_exception_uses_nearest():
     e = _two_candidates(FakeLLM(boom=True))
     run(e.agent.sync_calendars())
     assert offered_to(e) == ["Maria"]
+
+
+def test_gemini_pick_is_offered_only_once():
+    e = _two_candidates(FakeLLM(choose=1))
+    e.messenger.fail_for = {MARIA}
+    run(e.agent.sync_calendars())
+    assert offered_to(e)[:2] == ["Maria", "Elena"] or offered_to(e)[:2] == ["Maria", "Nikos"]
+
+
+def test_unreachable_cleaners_are_skipped_when_live():
+    e = telegram_env()
+    e.settings.dry_run, e.settings.telegram_bot_token = False, "tok"  # no Twilio: SMS cleaners can't be reached
+    feed_with_checkout(e)
+    run(e.agent.sync_calendars())
+    assert offered_to(e) == ["Maria"]
+
+
+def test_linking_retries_unfilled_jobs():
+    e = telegram_env()
+    e.settings.dry_run, e.settings.telegram_bot_token = False, "tok"
+    e.db.execute("UPDATE cleaners SET telegram_id=NULL")
+    feed_with_checkout(e)
+    run(e.agent.sync_calendars())
+    assert e.agent.list_jobs()[0]["status"] == "unfilled"  # nobody reachable yet
+    run(e.agent.handle_inbound("telegram", "tg-new", "6900000001"))
+    assert e.agent.list_jobs()[0]["status"] == "offering" and offered_to(e) == ["Maria"]
+    assert any("YES 1" in b for b in e.messenger.to("tg-new"))

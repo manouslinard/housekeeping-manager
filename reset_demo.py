@@ -54,6 +54,7 @@ def main() -> None:
         raise SystemExit("Real messaging is configured (DRY_RUN is off). Refusing; pass --force if you really mean it.")
 
     db = connect(s.db_path)
+    links = db.execute("SELECT phone, viber_id, telegram_id FROM cleaners WHERE viber_id IS NOT NULL OR telegram_id IS NOT NULL").fetchall()
     for table in ("unavailability", "offers", "jobs", "bookings", "calendars", "properties", "cleaners", "messages"):
         db.execute(f"DELETE FROM {table}")
     print("wiped", s.db_path)
@@ -61,6 +62,9 @@ def main() -> None:
         return
 
     asyncio.run(load_cleaners(db, s.cleaners_csv, s))  # demo cleaners live in data/cleaners.csv
+    for r in links:  # keep chats that were already linked to the bot
+        db.execute("UPDATE cleaners SET viber_id=COALESCE(?, viber_id), telegram_id=COALESCE(?, telegram_id) WHERE phone=?",
+                   (r["viber_id"], r["telegram_id"], r["phone"]))
     for room in range(1, ROOMS + 1):
         db.execute(
             "INSERT INTO properties(id, name, address, lat, lon, checkout_time, hotel, room) VALUES (?,?,?,?,?,?,?,?)",
