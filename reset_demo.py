@@ -50,11 +50,11 @@ def main() -> None:
     ap.add_argument("--force", action="store_true", help="run even when Twilio/Viber are configured")
     args = ap.parse_args()
     s = Settings.from_env()
-    if not s.dry_run and not args.force:
+    if (s.twilio_auth_token or s.viber_auth_token) and not args.force:
         raise SystemExit("Real messaging is configured (DRY_RUN is off). Refusing; pass --force if you really mean it.")
 
     db = connect(s.db_path)
-    for table in ("offers", "jobs", "bookings", "calendars", "properties", "cleaners", "messages"):
+    for table in ("unavailability", "offers", "jobs", "bookings", "calendars", "properties", "cleaners", "messages"):
         db.execute(f"DELETE FROM {table}")
     print("wiped", s.db_path)
     if args.empty:
@@ -67,7 +67,7 @@ def main() -> None:
             (f"{HOTEL.lower().replace(' ', '-')}-{room}", f"{HOTEL} – {room}", ADDRESS, LAT, LON, "11:00", HOTEL, str(room)),
         )
     n = seed_bookings(db, date.today())
-    print(f"loaded 8 cleaners, {ROOMS} rooms, {n} bookings")
+    print(f"loaded 9 cleaners, {ROOMS} rooms, {n} bookings")
 
     # ask a running server to turn the bookings into cleaning jobs now (otherwise it happens within SYNC_INTERVAL_MIN)
     port = os.environ.get("PORT", "8000")

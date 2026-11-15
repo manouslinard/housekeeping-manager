@@ -15,6 +15,7 @@ class CleanerIn(BaseModel):
     name: str
     phone: str
     address: str
+    channel: str = "sms"          # sms | viber | telegram
 
 
 class RoomIn(BaseModel):
@@ -137,7 +138,7 @@ def make_router(admin) -> APIRouter:
         rows = lambda sql: [dict(x) for x in a.q(sql)]  # noqa: E731
         return {
             "rooms": rows("SELECT id, name, address, hotel, room, checkout_time FROM properties ORDER BY COALESCE(hotel, name), CAST(room AS INTEGER), room"),
-            "cleaners": rows("SELECT id, name, phone, address, channel, max_jobs_per_day FROM cleaners WHERE active=1 ORDER BY name"),
+            "cleaners": rows("SELECT id, name, phone, address, channel, max_jobs_per_day, telegram_id IS NOT NULL AS linked FROM cleaners WHERE active=1 ORDER BY name"),
             "bookings": rows("SELECT * FROM bookings ORDER BY checkin_date"),
             "jobs": [j for j in a.list_jobs() if j["status"] != "cancelled"],
             "today": a.now().date().isoformat(),
@@ -153,10 +154,11 @@ def make_router(admin) -> APIRouter:
         if not pos:
             raise HTTPException(422, "Η διεύθυνση δεν βρέθηκε. Δοκίμασε πιο πλήρη διεύθυνση (οδός, αριθμός, πόλη).")
         a.x(
-            """INSERT INTO cleaners(name, phone, lat, lon, address, active, max_jobs_per_day) VALUES (?,?,?,?,?,1,?)
+            """INSERT INTO cleaners(name, phone, lat, lon, address, channel, active, max_jobs_per_day) VALUES (?,?,?,?,?,?,1,?)
                ON CONFLICT(phone) DO UPDATE SET name=excluded.name, lat=excluded.lat, lon=excluded.lon,
-                 address=excluded.address, active=1""",
-            (body.name.strip(), phone, *pos, body.address, a.s.default_max_jobs_per_day),
+                 address=excluded.address, channel=excluded.channel, active=1""",
+            (body.name.strip(), phone, *pos, body.address, body.channel if body.channel in ("sms", "viber", "telegram") else "sms",
+             a.s.default_max_jobs_per_day),
         )
         return {"ok": True}
 

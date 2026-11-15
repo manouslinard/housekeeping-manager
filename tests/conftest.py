@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -39,8 +40,11 @@ class FakeMessenger:
 
         if rcpt.phone in self.fail_for:
             raise SendError("boom")
-        channel = "viber" if rcpt.channel == "viber" and rcpt.viber_id else rcpt.channel
-        self.sent.append((channel, rcpt.viber_id if channel == "viber" else rcpt.phone, body))
+        channel = rcpt.channel
+        if (channel == "viber" and not rcpt.viber_id) or (channel == "telegram" and not rcpt.telegram_id):
+            channel = "sms"  # same fallback as the real Messenger
+        party = {"viber": rcpt.viber_id, "telegram": rcpt.telegram_id}.get(channel) or rcpt.phone
+        self.sent.append((channel, party, body))
 
     def log_inbound(self, *a, **k):
         pass
@@ -52,24 +56,26 @@ class FakeMessenger:
 class Env:
     """A fully wired agent with a controllable clock and calendar feeds."""
 
-    def __init__(self, **overrides):
-        self.settings = Settings(**{"dry_run": True, "owner_phone": "+306999999999", "skip_sunday": False, **overrides})
+    def __init__(self, llm=None, **overrides):
+        xlsx = tempfile.mkdtemp() + "/schedules.xlsx"
+        self.settings = Settings(**{"dry_run": True, "owner_phone": "+306999999999", "skip_sunday": False,
+                                    "schedule_xlsx": xlsx, **overrides})
         self.db = connect(":memory:")
         self.messenger = FakeMessenger()
         self.feeds: dict[str, str] = {}
         self.broken: set[str] = set()
         self.clock = datetime.combine(TODAY, time(10, 0), tzinfo=TZ)
-        self.agent = Agent(self.settings, self.db, self.messenger, now_fn=lambda: self.clock, fetch_fn=self._fetch)
+        self.agent = Agent(self.settings, self.db, self.messenger, now_fn=lambda: self.clock, fetch_fn=self._fetch, llm=llm)
 
     async def _fetch(self, url: str) -> str:
         if url in self.broken:
             raise RuntimeError("network down")
         return self.feeds[url]
 
-    def add_cleaner(self, name, phone, lat, lon, channel="sms", lang="en", max_jobs=3, viber_id=None):
+    def add_cleaner(self, name, phone, lat, lon, channel="sms", lang="en", max_jobs=3, viber_id=None, telegram_id=None):
         self.db.execute(
-            "INSERT INTO cleaners(name, phone, lat, lon, channel, language, viber_id, max_jobs_per_day) VALUES (?,?,?,?,?,?,?,?)",
-            (name, phone, lat, lon, channel, lang, viber_id, max_jobs),
+            "INSERT INTO cleaners(name, phone, lat, lon, channel, language, viber_id, telegram_id, max_jobs_per_day) VALUES (?,?,?,?,?,?,?,?,?)",
+            (name, phone, lat, lon, channel, lang, viber_id, telegram_id, max_jobs),
         )
 
     def add_property(self, pid, name, lat, lon, urls: dict[str, str]):

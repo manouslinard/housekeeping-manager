@@ -16,10 +16,11 @@ Without credentials the app runs in **dry-run**: messages are printed in the ser
 | | |
 |---|---|
 | Web UI, bookings, Excel import, job generation, nearest-cleaner offers over SMS/Viber | done |
-| **Part 1: Telegram channel** | to build |
-| **Part 2: Gemini agent** | to build |
+| **Part 1: Telegram channel** (`app/telegram.py`, webhook or long polling, link by phone number) | done |
+| **Part 2: Gemini agent** (`app/llm.py`: `interpret_reply`, `choose_cleaner`) | done |
+| **Per-cleaner Excel** (`app/schedule_xlsx.py`, `data/cleaner_schedules.xlsx`, rebuilt from the DB, read by Gemini) | done |
 
-Today the cleaner is chosen by a fixed cost function (below), no AI.
+The cleaner is chosen by a fixed cost function (below); Gemini, when a key is set, may reorder the candidates, and always falls back to that order. See `.env.example` for the settings.
 
 ## The whole flow (target design)
 

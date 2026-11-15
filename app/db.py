@@ -10,9 +10,10 @@ CREATE TABLE IF NOT EXISTS cleaners (
     name TEXT NOT NULL,
     phone TEXT NOT NULL UNIQUE,
     lat REAL, lon REAL, address TEXT,
-    channel TEXT NOT NULL DEFAULT 'sms',        -- sms | viber
+    channel TEXT NOT NULL DEFAULT 'sms',        -- sms | viber | telegram
     language TEXT NOT NULL DEFAULT 'en',        -- en | el
     viber_id TEXT,
+    telegram_id TEXT,
     active INTEGER NOT NULL DEFAULT 1,
     max_jobs_per_day INTEGER NOT NULL DEFAULT 3
 );
@@ -82,6 +83,14 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS unavailability (     -- days a cleaner can't work (sick, away, "only after 14:00" is NOT here)
+    id INTEGER PRIMARY KEY,
+    cleaner_id INTEGER NOT NULL REFERENCES cleaners(id),
+    from_date TEXT NOT NULL,                     -- YYYY-MM-DD, inclusive
+    to_date TEXT NOT NULL,                       -- YYYY-MM-DD, inclusive
+    reason TEXT
+);
+
 CREATE TABLE IF NOT EXISTS geocache (
     address TEXT PRIMARY KEY,
     lat REAL, lon REAL
@@ -102,6 +111,8 @@ def connect(path: str) -> sqlite3.Connection:
     for col in ("hotel", "room"):  # upgrade databases created before the UI existed
         if col not in have:
             conn.execute(f"ALTER TABLE properties ADD COLUMN {col} TEXT")
+    if "telegram_id" not in {r[1] for r in conn.execute("PRAGMA table_info(cleaners)")}:
+        conn.execute("ALTER TABLE cleaners ADD COLUMN telegram_id TEXT")
     if "kind" not in {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}:
         conn.execute("ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'checkout'")
     return conn

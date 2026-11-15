@@ -11,9 +11,11 @@ from zoneinfo import ZoneInfo
 from .config import Settings
 from .geo import haversine_km, normalize_phone
 from .ical import Reservation, fetch_ics, parse_ics
+from .llm import LLMError
 from .loaders import load_cleaners, load_properties
 from .messaging import Recipient, SendError
 from .replies import parse_reply
+from .schedule_xlsx import read_schedule, write_schedule
 from .templates import fmt_date, t
 
 log = logging.getLogger(__name__)
@@ -39,13 +41,14 @@ def iso(dt: datetime) -> str:
 
 
 class Agent:
-    def __init__(self, settings: Settings, db, messenger, now_fn=None, fetch_fn=None):
+    def __init__(self, settings: Settings, db, messenger, now_fn=None, fetch_fn=None, llm=None):
         self.s = settings
         self.db = db
         self.messenger = messenger
         self.tz = ZoneInfo(settings.timezone)
         self.now = now_fn or (lambda: datetime.now(self.tz))
         self.fetch = fetch_fn or fetch_ics
+        self.llm = llm  # app.llm.GeminiClient or a fake; None = no Gemini, the app works as before
         self.lock = asyncio.Lock()
         self._mtimes: dict[str, float | None] = {}
 
@@ -65,8 +68,18 @@ class Agent:
             return False
         return (h >= s or h < e) if s > e else (s <= h < e)
 
+    # ---- per-cleaner Excel (derived from the DB; Gemini reads it) -----------
+    def export_schedule(self) -> dict | None:
+        """Rewrite the workbook from the DB and read it back. None if the file can't be written (never fatal)."""
+        try:
+            write_schedule(self, self.s.schedule_xlsx)
+            return read_schedule(self.s.schedule_xlsx)
+        except Exception:
+            log.exception("could not write %s", self.s.schedule_xlsx)
+            return None
+
     async def _send(self, cleaner, body: str, job_id: int | None = None) -> None:
-        await self.messenger.send(Recipient(cleaner["phone"], cleaner["channel"], cleaner["viber_id"]), body, job_id)
+        await self.messenger.send(Recipient(cleaner["phone"], cleaner["channel"], cleaner["viber_id"], cleaner["telegram_id"]), body, job_id)
 
     async def _safe_send(self, cleaner, body: str, job_id: int | None = None) -> None:
         try:
@@ -244,6 +257,11 @@ class Agent:
         start = _mins(job["checkout_time"])
         return len(day) >= cleaner["max_jobs_per_day"] or any(abs(m - start) < self.s.cleaning_min for m in day)
 
+    def _away(self, cleaner_id: int, day: str) -> bool:
+        return self.q1(
+            "SELECT 1 FROM unavailability WHERE cleaner_id=? AND from_date<=? AND to_date>=?", (cleaner_id, day, day)
+        ) is not None
+
     def _candidates(self, job, prop, planned: dict | None = None) -> list:
         """Cleaners who could take this job, cheapest first (assignment_cost), as (km, cleaner) pairs.
 
@@ -258,7 +276,7 @@ class Agent:
         held = self._held()
         scored = []
         for c in self.q("SELECT * FROM cleaners WHERE active=1"):
-            if c["id"] in excluded:
+            if c["id"] in excluded or self._away(c["id"], job["checkout_date"]):
                 continue
             slots = held.get(c["id"], []) + (planned or {}).get(c["id"], [])
             if self._clash(c, job, slots):
@@ -270,9 +288,52 @@ class Agent:
         scored.sort(key=lambda x: (x[0], x[2]["name"]))
         return [(km, c) for _, km, c in scored]
 
+    async def _llm_pick(self, job, prop, candidates: list) -> list:
+        """Let Gemini choose among the candidates (they already pass every hard rule). Its pick goes first; anything
+        invalid, any error, or no Gemini = the order the cost function gave."""
+        if self.llm is None or len(candidates) < 2:
+            return candidates
+        sheets = self.export_schedule() or {"schedule": [], "open_jobs": []}
+        day = job["checkout_date"]
+        held = self._held()
+        cands = [
+            {
+                "id": c["id"], "name": c["name"], "km": round(km, 1),
+                "jobs_that_day": sum(1 for d, _ in held.get(c["id"], []) if d == day),
+                "max_jobs_per_day": c["max_jobs_per_day"],
+                "schedule": [
+                    {k: r[k] for k in ("date", "start", "end", "hotel", "room", "status")}
+                    for r in sheets["schedule"] if r["cleaner_id"] == c["id"]
+                ],
+            }
+            for km, c in candidates
+        ]
+        hotel = prop["hotel"] or prop["name"]
+        ctx = {
+            "same_hotel_same_day": [
+                {k: r.get(k) for k in ("job_id", "start", "room", "cleaner", "status")}
+                for r in sheets["schedule"] + sheets["open_jobs"]
+                if r["date"] == day and r["hotel"] == hotel and r["job_id"] != job["id"]
+            ],
+        }
+        job_info = {
+            "id": job["id"], "hotel": hotel, "room": prop["room"], "date": day, "start": job["checkout_time"],
+            "kind": job["kind"], "same_day_turnover": job["next_checkin_date"] == day,
+        }
+        try:
+            chosen = await self.llm.choose_cleaner(job_info, cands, ctx)
+        except Exception as exc:  # LLMError, timeouts, bad JSON, ... never block the offer
+            log.warning("Gemini choose_cleaner failed (%s); using the nearest cleaner", exc)
+            return candidates
+        pick = next(((km, c) for km, c in candidates if c["id"] == chosen), None)
+        if pick is None:
+            log.warning("Gemini returned %r, not a candidate; using the nearest cleaner", chosen)
+            return candidates
+        return [pick] + [x for x in candidates if x is not pick]
+
     async def _offer_next(self, job) -> None:
         prop = self.q1("SELECT * FROM properties WHERE id=?", (job["property_id"],))
-        candidates = self._candidates(job, prop)
+        candidates = await self._llm_pick(job, prop, self._candidates(job, prop))
         now = self.now()
         for km, c in candidates:
             cur = self.x(
@@ -317,10 +378,11 @@ class Agent:
 
     async def _inbound(self, channel: str, sender: str, text: str) -> None:
         cc = self.s.default_country_code
-        if channel == "viber":
-            cleaner = self.q1("SELECT * FROM cleaners WHERE viber_id=? AND active=1", (sender,))
+        if channel in ("viber", "telegram"):
+            col = f"{channel}_id"
+            cleaner = self.q1(f"SELECT * FROM cleaners WHERE {col}=? AND active=1", (sender,))
             if cleaner is None:
-                await self._link_viber(sender, text)
+                await self._link_chat(channel, sender, text)
                 return
         else:
             cleaner = self.q1("SELECT * FROM cleaners WHERE phone=? AND active=1", (normalize_phone(sender, cc),))
@@ -335,25 +397,120 @@ class Agent:
         elif intent == "done":
             await self._mark_done(cleaner, job_id)
         else:
-            await self._safe_send(cleaner, t(lang, "unknown"))
+            await self._free_text(cleaner, text)
 
-    async def _link_viber(self, viber_id: str, text: str) -> None:
-        """Viber users are identified by an opaque id; match it to a cleaner via their phone number."""
-        rcpt = Recipient("", "viber", viber_id)
+    async def _link_chat(self, channel: str, chat_id: str, text: str) -> None:
+        """Viber/Telegram users are identified by an opaque id; match it to a cleaner via their phone number."""
+        rcpt = Recipient("", channel, chat_id) if channel == "viber" else Recipient("", channel, telegram_id=chat_id)
         if len(re.sub(r"\D", "", text)) >= 7:
             phone = normalize_phone(text, self.s.default_country_code)
             cleaner = self.q1("SELECT * FROM cleaners WHERE phone=? AND active=1", (phone,))
             if cleaner is not None:
-                self.x("UPDATE cleaners SET viber_id=? WHERE id=?", (viber_id, cleaner["id"]))
+                self.x(f"UPDATE cleaners SET {channel}_id=NULL WHERE {channel}_id=?", (chat_id,))
+                self.x(f"UPDATE cleaners SET {channel}_id=? WHERE id=?", (chat_id, cleaner["id"]))
                 try:
                     await self.messenger.send(rcpt, t(cleaner["language"], "linked", name=cleaner["name"]))
                 except SendError as exc:
-                    log.error("viber link reply failed: %s", exc)
+                    log.error("%s link reply failed: %s", channel, exc)
                 return
         try:
             await self.messenger.send(rcpt, t("en", "link_prompt"))
         except SendError as exc:
-            log.error("viber prompt failed: %s", exc)
+            log.error("%s prompt failed: %s", channel, exc)
+
+    # ---- free-text replies (Gemini) -----------------------------------
+    def _reply_context(self, cleaner) -> dict:
+        sheets = self.export_schedule() or {"schedule": []}
+        offers = self.q(
+            """SELECT j.id, p.hotel, p.room, p.name, j.checkout_date, j.checkout_time FROM offers o
+               JOIN jobs j ON j.id=o.job_id JOIN properties p ON p.id=j.property_id
+               WHERE o.cleaner_id=? AND o.status='pending' ORDER BY j.checkout_date, j.checkout_time""",
+            (cleaner["id"],),
+        )
+        return {
+            "today": self.now().date().isoformat(), "weekday": self.now().strftime("%A"),
+            "cleaner": {"name": cleaner["name"], "language": cleaner["language"]},
+            "open_offers": [
+                {"job_id": o["id"], "hotel": o["hotel"] or o["name"], "room": o["room"], "date": o["checkout_date"],
+                 "start": o["checkout_time"]} for o in offers
+            ],
+            "upcoming_jobs": [
+                {k: r[k] for k in ("job_id", "date", "start", "hotel", "room", "status")}
+                for r in sheets["schedule"] if r["cleaner_id"] == cleaner["id"]
+            ],
+        }
+
+    async def _free_text(self, cleaner, text: str) -> None:
+        """parse_reply didn't understand her: ask Gemini what she meant, then act through the normal code paths."""
+        lang = cleaner["language"]
+        if self.llm is None:
+            await self._safe_send(cleaner, t(lang, "unknown"))
+            return
+        ctx = self._reply_context(cleaner)
+        try:
+            r = await self.llm.interpret_reply(text, ctx)
+        except Exception as exc:
+            log.warning("Gemini interpret_reply failed (%s)", exc)
+            await self._safe_send(cleaner, t(lang, "unknown"))
+            return
+        known = {o["job_id"] for o in ctx["open_offers"]} | {j["job_id"] for j in ctx["upcoming_jobs"]}
+        job_id = r.get("job_id") if r.get("job_id") in known else None  # ids Gemini invented are ignored
+        intent, reply = r.get("intent"), (r.get("reply_text") or "").strip()
+        if intent == "yes":
+            await self._answer_offer(cleaner, "yes", job_id)
+        elif intent == "no":
+            held = self.q1("SELECT * FROM jobs WHERE id=? AND cleaner_id=? AND status='assigned'", (job_id, cleaner["id"])) if job_id else None
+            if held is not None:  # she had accepted, now she can't: put it back in the pool
+                self._release(cleaner["id"], held)
+                await self._safe_send(cleaner, reply or t(lang, "rearranged"), held["id"])
+                await self._advance()
+            else:
+                await self._answer_offer(cleaner, "no", job_id)
+        elif intent == "done":
+            await self._mark_done(cleaner, job_id)
+        elif intent == "unavailable" and await self._set_unavailable(cleaner, r, reply):
+            pass
+        else:
+            await self._safe_send(cleaner, reply or t(lang, "unknown"))
+
+    def _release(self, cleaner_id: int, job) -> None:
+        """Take a job away from a cleaner (offer or accepted) so it goes back to the pool."""
+        now_iso = iso(self.now())
+        self.x(
+            "UPDATE offers SET status='declined', responded_at=? WHERE job_id=? AND cleaner_id=? AND status IN ('pending','accepted')",
+            (now_iso, job["id"], cleaner_id),
+        )
+        self.x("UPDATE jobs SET status='pending', cleaner_id=NULL, reminded_at=NULL, updated_at=? WHERE id=?", (now_iso, job["id"]))
+
+    async def _set_unavailable(self, cleaner, r: dict, reply: str) -> bool:
+        """Store the dates, release her affected jobs/offers, tell her, look for replacements. False if dates are unusable."""
+        today = self.now().date()
+        try:
+            frm = date.fromisoformat(r.get("unavailable_from") or today.isoformat())
+            to = date.fromisoformat(r.get("unavailable_to") or frm.isoformat())
+        except (TypeError, ValueError):
+            return False
+        frm, to = max(frm, today), min(to, today + timedelta(days=self.s.horizon_days))
+        if to < frm:
+            return False
+        lang = cleaner["language"]
+        self.x(
+            "INSERT INTO unavailability(cleaner_id, from_date, to_date, reason) VALUES (?, ?, ?, ?)",
+            (cleaner["id"], frm.isoformat(), to.isoformat(), reply[:200] or None),
+        )
+        for job in self.q(
+            """SELECT DISTINCT j.* FROM jobs j LEFT JOIN offers o ON o.job_id=j.id AND o.cleaner_id=? AND o.status='pending'
+               WHERE j.checkout_date BETWEEN ? AND ? AND j.status IN ('offering','assigned')
+                 AND (j.cleaner_id=? OR o.id IS NOT NULL)""",
+            (cleaner["id"], frm.isoformat(), to.isoformat(), cleaner["id"]),
+        ):
+            log.info("%s is away; releasing job %s", cleaner["name"], job["id"])
+            self._release(cleaner["id"], job)
+        await self._safe_send(
+            cleaner, reply or t(lang, "unavailable_ack", frm=fmt_date(frm, lang), to=fmt_date(to, lang))
+        )
+        await self._advance()
+        return True
 
     def _find_offer(self, cleaner_id: int, job_id: int | None):
         """Return (offer, reason). reason is 'none' or 'ambiguous' when offer is None."""
@@ -498,3 +655,4 @@ class Agent:
         else:
             await self.advance()
         await self.send_reminders()
+        self.export_schedule()

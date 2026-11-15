@@ -50,7 +50,7 @@ async def load_cleaners(db, path: str, s: Settings) -> int:
             log.warning("cleaner %s has no usable location (give lat/lon or a geocodable address); skipped", row["name"])
             continue
         channel = row.get("channel", "sms").lower()
-        channel = channel if channel in ("sms", "viber") else "sms"
+        channel = channel if channel in ("sms", "viber", "telegram") else "sms"
         lang = row.get("language", "en").lower()
         lang = lang if lang in ("en", "el") else "en"
         max_jobs = int(row["max_jobs_per_day"]) if row.get("max_jobs_per_day", "").isdigit() else s.default_max_jobs_per_day

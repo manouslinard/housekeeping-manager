@@ -94,7 +94,8 @@ label input,label select{margin-top:3px;color:var(--ink)}
 <dialog id="dCleaner"><form method="dialog" data-api="/api/cleaners">
   <h3>Νέα καθαρίστρια</h3>
   <label>Όνομα<input name="name" required></label>
-  <label>Τηλέφωνο (Telegram)<input name="phone" required placeholder="+30 690 000 0000"></label>
+  <label>Τηλέφωνο<input name="phone" required placeholder="+30 690 000 0000"></label>
+  <label>Κανάλι<select name="channel"><option value="telegram">Telegram</option><option value="sms">SMS</option><option value="viber">Viber</option></select></label>
   <label>Διεύθυνση<input name="address" required placeholder="Οδός, αριθμός, πόλη"></label>
   <p class="ferr"></p>
   <div class="actions"><button type="button" data-close>Άκυρο</button><button class="pri">Προσθήκη</button></div>
@@ -196,7 +197,7 @@ function renderCleaners() {
       <div><b>${esc(c.name)}</b><span class="meta">${esc(c.phone)}</span></div>
       <button class="x" data-del-cleaner="${c.id}" title="Αφαίρεση">✕</button></div>
       <div class="meta" style="margin-top:8px">📍 ${esc(c.address || "—")}</div>
-      <div style="margin-top:6px"><span class="tag">${esc(c.channel)}</span><span class="tag">έως ${c.max_jobs_per_day}/ημέρα</span><span class="tag">${mine.length} αναθέσεις</span>${asked.length ? `<span class="tag" style="color:var(--offering)">${asked.length} σε εκκρεμότητα</span>` : ""}</div>
+      <div style="margin-top:6px"><span class="tag">${esc(c.channel)}${c.channel === "telegram" && !c.linked ? " ⚠ δεν έχει συνδεθεί" : ""}</span><span class="tag">έως ${c.max_jobs_per_day}/ημέρα</span><span class="tag">${mine.length} αναθέσεις</span>${asked.length ? `<span class="tag" style="color:var(--offering)">${asked.length} σε εκκρεμότητα</span>` : ""}</div>
       ${asked.length ? `<div class="jobs">${asked.slice(0, 3).map(j => `<div><span>${fmtD(j.checkout_date)}</span><span>${esc(room(j.property_id))}</span><span class="meta">${j.queued ? "⏳ στην ουρά" : "ζητήθηκε"} · ${j.offered_km.toFixed(1)} χλμ</span></div>`).join("")}</div>` : ""}
       ${mine.length ? `<div class="jobs">${mine.slice(0, 5).map(j => `<div><span>${fmtD(j.checkout_date)}</span><span>${esc(room(j.property_id))}</span><span class="meta">${esc(j.checkout_time)}</span></div>`).join("")}${mine.length > 5 ? `<div class="meta">+${mine.length - 5} ακόμη</div>` : ""}</div>`
       : `<div class="none">Καμία ανάθεση ακόμη</div>`}</div>`;
