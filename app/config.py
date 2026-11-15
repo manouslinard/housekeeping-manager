@@ -119,8 +119,8 @@ class Settings:
             telegram_bot_token=telegram_token,
             smtp_host=_s("SMTP_HOST", "smtp.gmail.com"),
             smtp_port=_i("SMTP_PORT", 587),
-            smtp_user=_s("SMTP_USER"),
-            smtp_password=_s("SMTP_PASSWORD").replace(" ", ""),  # Google shows app passwords as 4 groups of 4
+            smtp_user=_s("SMTP_USER").split("#")[0].strip(),  # tolerate "me@gmail.com# comment" (no space before #)
+            smtp_password=_s("SMTP_PASSWORD").split("#")[0].replace(" ", ""),  # app passwords: 4 groups of 4 letters
             mail_from=_s("MAIL_FROM"),
             telegram_bot_username=_s("TELEGRAM_BOT_USERNAME").lstrip("@"),
             telegram_webhook_secret=_s("TELEGRAM_WEBHOOK_SECRET"),
