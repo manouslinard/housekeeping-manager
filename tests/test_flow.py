@@ -181,3 +181,13 @@ def test_send_failure_falls_through_to_next_cleaner(env):
     offered = env.db.execute("SELECT c.name, o.status FROM offers o JOIN cleaners c ON c.id=o.cleaner_id ORDER BY o.id").fetchall()
     assert offered[0]["name"] == "Maria" and offered[0]["status"] == "failed"
     assert offered[1]["status"] == "pending"
+
+
+def test_sync_survives_a_completed_job_on_a_future_day(env):
+    feed_with_checkout(env)
+    run(env.agent.sync_calendars())
+    run(env.agent.handle_inbound("sms", MARIA, "yes"))
+    run(env.agent.handle_inbound("sms", MARIA, "done 1"))  # finished early: status completed, day is still in the future
+    assert jobs(env)[0]["status"] == "completed"
+    run(env.agent.sync_calendars())  # used to crash: UNIQUE constraint failed: jobs.property_id, jobs.checkout_date
+    assert [j["status"] for j in jobs(env)] == ["completed"]

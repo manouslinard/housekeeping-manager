@@ -54,6 +54,7 @@ h2 small{color:var(--mute);font-weight:400}
 .meta{color:var(--mute);font-size:12px}
 .cl .x{margin-left:auto;border:0;padding:2px 8px;color:var(--mute);background:none}
 .cl .x:hover{color:var(--unfilled);transform:none}
+.cl .x.tg{margin-left:auto;color:var(--accent);font-size:12px}.cl .x.tg+.x{margin-left:0}.cl .x.tg:hover{color:var(--accent2)}
 .tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:99px;background:var(--bg);color:var(--mute);margin-right:4px}
 .jobs{margin-top:10px;display:flex;flex-direction:column;gap:5px;font-size:12px}
 .jobs div{display:flex;gap:8px;align-items:center;padding:4px 8px;border-radius:8px;background:var(--bg)}
@@ -94,7 +95,9 @@ label input,label select{margin-top:3px;color:var(--ink)}
 <dialog id="dCleaner"><form method="dialog" data-api="/api/cleaners">
   <h3>Νέα καθαρίστρια</h3>
   <label>Όνομα<input name="name" required></label>
-  <label>Τηλέφωνο (Telegram)<input name="phone" required placeholder="+30 690 000 0000"></label>
+  <label>Τηλέφωνο<input name="phone" required placeholder="+30 690 000 0000"></label>
+  <label>Email (εκεί στέλνεται ο σύνδεσμος Telegram)<input name="email" type="email" placeholder="name@gmail.com"></label>
+  <label>Κανάλι<select name="channel"><option value="telegram">Telegram</option><option value="sms">SMS</option><option value="viber">Viber</option></select></label>
   <label>Διεύθυνση<input name="address" required placeholder="Οδός, αριθμός, πόλη"></label>
   <p class="ferr"></p>
   <div class="actions"><button type="button" data-close>Άκυρο</button><button class="pri">Προσθήκη</button></div>
@@ -142,11 +145,21 @@ label input,label select{margin-top:3px;color:var(--ink)}
   <div class="actions"><button type="button" data-close>Άκυρο</button><button class="pri">Εισαγωγή</button></div>
 </form></dialog>
 
+<dialog id="dTg"><h3>Σύνδεση Telegram · <span id="tgName"></span></h3>
+  <p class="meta" style="margin-top:0">Στείλε αυτόν τον σύνδεσμο στην καθαρίστρια (Viber, WhatsApp, SMS) ή δείξε της το QR.
+  Το πατάει, ανοίγει το Telegram, πατάει <b>Start</b> και συνδέεται. Ισχύει μία φορά.</p>
+  <div id="tgQr" style="display:grid;place-items:center;margin:12px 0"></div>
+  <input id="tgUrl" readonly onclick="this.select()">
+  <p id="tgState" class="meta"></p>
+  <div class="actions"><button type="button" data-close>Κλείσιμο</button><button type="button" id="tgShare">Κοινοποίηση</button><button type="button" id="tgMail">✉ Αποστολή στο email</button><button type="button" class="pri" id="tgCopy">Αντιγραφή</button></div>
+</dialog>
+
 <dialog id="dDetail"><h3 id="dtTitle"></h3><div id="dtBody"></div>
   <div class="actions"><button class="danger" id="dtDel">Διαγραφή κράτησης</button><button data-close>Κλείσιμο</button></div>
 </dialog>
 <div id="toast"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -194,9 +207,10 @@ function renderCleaners() {
     const ini = c.name.split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase();
     return `<div class="card cl"><div class="top"><div class="av" style="background:${COLORS[i % COLORS.length]}">${esc(ini)}</div>
       <div><b>${esc(c.name)}</b><span class="meta">${esc(c.phone)}</span></div>
+      ${c.channel === "telegram" ? `<button class="x tg" data-tg-link="${c.id}" title="Σύνδεσμος σύνδεσης Telegram">🔗 Telegram</button>` : ""}
       <button class="x" data-del-cleaner="${c.id}" title="Αφαίρεση">✕</button></div>
-      <div class="meta" style="margin-top:8px">📍 ${esc(c.address || "—")}</div>
-      <div style="margin-top:6px"><span class="tag">${esc(c.channel)}</span><span class="tag">έως ${c.max_jobs_per_day}/ημέρα</span><span class="tag">${mine.length} αναθέσεις</span>${asked.length ? `<span class="tag" style="color:var(--offering)">${asked.length} σε εκκρεμότητα</span>` : ""}</div>
+      <div class="meta" style="margin-top:8px">📍 ${esc(c.address || "—")}${c.email ? `<br>✉ ${esc(c.email)}` : ""}</div>
+      <div style="margin-top:6px"><span class="tag">${esc(c.channel)}${c.channel === "telegram" && !c.linked ? " ⚠ δεν έχει συνδεθεί" : ""}</span><span class="tag">έως ${c.max_jobs_per_day}/ημέρα</span><span class="tag">${mine.length} αναθέσεις</span>${asked.length ? `<span class="tag" style="color:var(--offering)">${asked.length} σε εκκρεμότητα</span>` : ""}</div>
       ${asked.length ? `<div class="jobs">${asked.slice(0, 3).map(j => `<div><span>${fmtD(j.checkout_date)}</span><span>${esc(room(j.property_id))}</span><span class="meta">${j.queued ? "⏳ στην ουρά" : "ζητήθηκε"} · ${j.offered_km.toFixed(1)} χλμ</span></div>`).join("")}</div>` : ""}
       ${mine.length ? `<div class="jobs">${mine.slice(0, 5).map(j => `<div><span>${fmtD(j.checkout_date)}</span><span>${esc(room(j.property_id))}</span><span class="meta">${esc(j.checkout_time)}</span></div>`).join("")}${mine.length > 5 ? `<div class="meta">+${mine.length - 5} ακόμη</div>` : ""}</div>`
       : `<div class="none">Καμία ανάθεση ακόμη</div>`}</div>`;
@@ -277,10 +291,34 @@ document.addEventListener("click", async e => {
   if (t.dataset.delHotel && confirm(`Διαγραφή του «${t.dataset.delHotel}» με όλα τα δωμάτια, τις κρατήσεις και τους καθαρισμούς του;`)) {
     await api("/api/hotels?name=" + encodeURIComponent(t.dataset.delHotel), {method: "DELETE"}).catch(err => toast(err.message, true)); load();
   }
+  if (t.dataset.tgLink) showTgLink(+t.dataset.tgLink);
   if (t.dataset.delCleaner && confirm("Αφαίρεση καθαρίστριας;")) { await api("/api/cleaners/" + t.dataset.delCleaner, {method: "DELETE"}); load(); }
   const b = t.closest("[data-b]");
   if (b) showBooking(+b.dataset.b);
 });
+
+async function showTgLink(id) {
+  let res;
+  try { res = await api(`/api/cleaners/${id}/telegram-link`); } catch (err) { return toast(err.message, true); }
+  $("#tgName").textContent = res.name;
+  $("#tgUrl").value = res.url;
+  $("#tgState").textContent = res.linked ? "✓ Είναι ήδη συνδεδεμένη. Ένας νέος σύνδεσμος τη μεταφέρει σε άλλο κινητό." : "⚠ Δεν έχει συνδεθεί ακόμη.";
+  const qr = $("#tgQr"); qr.innerHTML = "";
+  try { new QRCode(qr, {text: res.url, width: 180, height: 180}); } catch { qr.innerHTML = ""; } // offline: link still works
+  $("#tgCopy").onclick = async () => { try { await navigator.clipboard.writeText(res.url); toast("Αντιγράφηκε"); } catch { $("#tgUrl").select(); } };
+  $("#tgShare").hidden = !navigator.share;
+  const mail = $("#tgMail");
+  mail.hidden = !res.email; mail.disabled = !res.can_email;
+  mail.title = res.can_email ? res.email : "Συμπλήρωσε SMTP_USER / SMTP_PASSWORD στο .env";
+  mail.onclick = async () => {
+    mail.disabled = true;
+    try { const r = await api(`/api/cleaners/${id}/telegram-link/email`, {method: "POST"}); toast("Στάλθηκε στο " + r.to); }
+    catch (err) { toast(err.message, true); }
+    finally { mail.disabled = false; }
+  };
+  $("#tgShare").onclick = () => navigator.share({title: "Σύνδεση Telegram", text: `Γεια σου ${res.name}! Πάτα εδώ και μετά Start για να λαμβάνεις τα καθαρίσματα:`, url: res.url}).catch(() => {});
+  $("#dTg").showModal();
+}
 
 function focusHotel(h) {
   const tr = [...document.querySelectorAll("tr.hotel")].find(x => x.dataset.hotel === h);
@@ -317,7 +355,8 @@ document.addEventListener("submit", async e => {
       opts = {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(o)};
     }
     const res = await api(f.dataset.api, opts);
-    toast(res.bookings != null ? `Εισήχθησαν ${res.bookings} κρατήσεις` + (res.skipped ? ` · ${res.skipped} παραλείφθηκαν (υπάρχουν ήδη)` : "") : "Αποθηκεύτηκε");
+    if (res.email_error) toast("Αποθηκεύτηκε, αλλά το email απέτυχε: " + res.email_error, true); else
+    toast(res.emailed ? "Αποθηκεύτηκε · ο σύνδεσμος Telegram στάλθηκε στο " + res.emailed : res.bookings != null ? `Εισήχθησαν ${res.bookings} κρατήσεις` + (res.skipped ? ` · ${res.skipped} παραλείφθηκαν (υπάρχουν ήδη)` : "") : "Αποθηκεύτηκε");
     if (res.first_date) $("#start").value = res.first_date; // show the imported period, not today
     const hotel = f.dataset.api === "/api/rooms" ? f.hotel.value.trim() : null;
     f.reset(); f.closest("dialog").close(); await load();

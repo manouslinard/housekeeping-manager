@@ -1,3 +1,7 @@
 .claude/
 .pytest_cache/
 .env
+!.env.example
+__pycache__/
+.venv/
+data/cleaner_schedules*.xlsx

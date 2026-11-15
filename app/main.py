@@ -19,7 +19,10 @@ from .agent import Agent
 from .api import make_router
 from .config import Settings
 from .db import connect
+from .llm import make_llm
 from .messaging import Messenger
+from .telegram import parse_update, poll_forever, set_webhook
+from .view import router as web_router
 
 log = logging.getLogger("cleaner-agent")
 
@@ -56,16 +59,25 @@ def create_app(settings: Settings | None = None, agent: Agent | None = None, bac
         nonlocal agent
         if agent is None:
             db = connect(settings.db_path)
-            agent = Agent(settings, db, Messenger(settings, db))
+            agent = Agent(settings, db, Messenger(settings, db), llm=make_llm(settings))
         app.state.agent = agent
-        task = None
+        task = tg_task = None
         if background:
             if settings.dry_run:
                 log.warning("DRY_RUN is on: messages are printed, not sent")
             task = asyncio.create_task(_run_forever(agent))
+            if settings.telegram_bot_token:
+                if settings.telegram_webhook_secret and settings.public_base_url:
+                    await set_webhook(settings.telegram_bot_token, settings.public_base_url + "/webhooks/telegram",
+                                      settings.telegram_webhook_secret)
+                elif not settings.telegram_webhook_secret:  # no webhook configured: long polling needs no public URL
+                    tg_task = asyncio.create_task(poll_forever(agent, settings.telegram_bot_token))
+            if agent.llm is None:
+                log.warning("Gemini is off (no GEMINI_API_KEY or LLM_ENABLED=0): free-text replies get the fixed help text")
         yield
-        if task:
-            task.cancel()
+        for t_ in (task, tg_task):
+            if t_:
+                t_.cancel()
 
     app = FastAPI(title="Cleaner scheduling agent", lifespan=lifespan)
     app.state.settings = settings
@@ -80,6 +92,7 @@ def create_app(settings: Settings | None = None, agent: Agent | None = None, bac
             raise HTTPException(401, "Bad admin token")
 
     app.include_router(make_router(admin))
+    app.include_router(web_router)  # /job/{id}: HTML page for a cleaning job
 
     @app.get("/", include_in_schema=False)
     async def ui():
@@ -157,8 +170,25 @@ def create_app(settings: Settings | None = None, agent: Agent | None = None, bac
                 tasks.add_task(_safe_inbound, request.app.state.agent, "viber", sender, text)
         return {"status": 0}
 
+    @app.post("/webhooks/telegram")
+    async def telegram_webhook(request: Request, tasks: BackgroundTasks):
+        secret = settings.telegram_webhook_secret
+        got = request.headers.get("x-telegram-bot-api-secret-token", "")
+        if secret:
+            if not hmac.compare_digest(got, secret):
+                raise HTTPException(403, "Invalid Telegram secret")
+        elif not settings.dry_run:
+            raise HTTPException(403, "Set TELEGRAM_WEBHOOK_SECRET to use the Telegram webhook")
+        try:
+            update = await request.json()
+        except ValueError:
+            raise HTTPException(400, "Bad JSON")
+        msg = parse_update(update) if isinstance(update, dict) else None
+        if msg:
+            tasks.add_task(_safe_inbound, request.app.state.agent, "telegram", msg["chat_id"], msg["text"] or msg["contact_phone"])
+        return {"ok": True}
+
     return app
 
-app = create_app()
 
-app.include_router(web_router)
+app = create_app()

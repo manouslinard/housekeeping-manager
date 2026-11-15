@@ -64,12 +64,25 @@ class Settings:
     public_base_url: str = ""        # e.g. https://cleaning.example.com (used to verify Twilio signatures)
     verify_webhooks: bool = True
     admin_token: str = ""
+    telegram_bot_token: str = ""
+    smtp_host: str = "smtp.gmail.com"  # email for sending cleaners their Telegram link
+    smtp_port: int = 587
+    smtp_user: str = ""              # e.g. yourname@gmail.com
+    smtp_password: str = ""          # Gmail: an App Password (needs 2-step verification), not your normal password
+    mail_from: str = ""              # defaults to smtp_user
+    telegram_bot_username: str = ""   # e.g. Kerkyra_bot; looked up with getMe when empty
+    telegram_webhook_secret: str = ""  # set => Telegram calls POST /webhooks/telegram; empty => the app long-polls instead
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-flash-latest"
+    llm_enabled: bool = True
+    schedule_xlsx: str = "data/cleaner_schedules.xlsx"  # per-cleaner program, derived from the DB, read by Gemini
     dry_run: bool = True             # print messages instead of sending them
 
     @classmethod
     def from_env(cls) -> "Settings":
         twilio_token = _s("TWILIO_AUTH_TOKEN")
         viber_token = _s("VIBER_AUTH_TOKEN")
+        telegram_token = _s("TELEGRAM_BOT_TOKEN")
         return cls(
             db_path=_s("DB_PATH", "data/agent.db"),
             cleaners_csv=_s("CLEANERS_CSV", "data/cleaners.csv"),
@@ -103,5 +116,17 @@ class Settings:
             public_base_url=_s("PUBLIC_BASE_URL").rstrip("/"),
             verify_webhooks=_b("VERIFY_WEBHOOKS", True),
             admin_token=_s("ADMIN_TOKEN"),
-            dry_run=_b("DRY_RUN", not (twilio_token or viber_token)),
+            telegram_bot_token=telegram_token,
+            smtp_host=_s("SMTP_HOST", "smtp.gmail.com"),
+            smtp_port=_i("SMTP_PORT", 587),
+            smtp_user=_s("SMTP_USER").split("#")[0].strip(),  # tolerate "me@gmail.com# comment" (no space before #)
+            smtp_password=_s("SMTP_PASSWORD").split("#")[0].replace(" ", ""),  # app passwords: 4 groups of 4 letters
+            mail_from=_s("MAIL_FROM"),
+            telegram_bot_username=_s("TELEGRAM_BOT_USERNAME").lstrip("@"),
+            telegram_webhook_secret=_s("TELEGRAM_WEBHOOK_SECRET"),
+            gemini_api_key=_s("GEMINI_API_KEY"),
+            gemini_model=_s("GEMINI_MODEL", "gemini-flash-latest"),
+            llm_enabled=_b("LLM_ENABLED", True),
+            schedule_xlsx=_s("SCHEDULE_XLSX", "data/cleaner_schedules.xlsx"),
+            dry_run=_b("DRY_RUN", not (twilio_token or viber_token or telegram_token)),
         )

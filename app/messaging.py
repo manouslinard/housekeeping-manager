@@ -1,4 +1,4 @@
-"""Sending texts: Twilio SMS and Viber, plus a dry-run mode that just prints."""
+"""Sending texts: Twilio SMS, Viber and Telegram, plus a dry-run mode that just prints."""
 from __future__ import annotations
 
 import logging
@@ -19,8 +19,9 @@ class SendError(Exception):
 @dataclass
 class Recipient:
     phone: str
-    channel: str = "sms"          # sms | viber
+    channel: str = "sms"          # sms | viber | telegram
     viber_id: str | None = None
+    telegram_id: str | None = None
 
 
 class Messenger:
@@ -30,11 +31,11 @@ class Messenger:
 
     async def send(self, rcpt: Recipient, body: str, job_id: int | None = None) -> None:
         channel = rcpt.channel
-        if channel == "viber" and not rcpt.viber_id:
-            # Viber can only reach people who already opened our bot; fall back to SMS until they do.
-            log.info("no viber id for %s, falling back to SMS", rcpt.phone)
+        if channel in ("viber", "telegram") and not (rcpt.viber_id if channel == "viber" else rcpt.telegram_id):
+            # Viber/Telegram bots can only reach people who already opened the chat; fall back to SMS until they do.
+            log.info("no %s id for %s, falling back to SMS", channel, rcpt.phone)
             channel = "sms"
-        party = rcpt.viber_id if channel == "viber" else rcpt.phone
+        party = {"viber": rcpt.viber_id, "telegram": rcpt.telegram_id}.get(channel) or rcpt.phone
 
         if self.s.dry_run:
             provider = "dry-run"
@@ -45,6 +46,9 @@ class Messenger:
         elif channel == "viber":
             await self._viber(rcpt.viber_id or "", body)
             provider = "viber"
+        elif channel == "telegram":
+            await self._telegram(rcpt.telegram_id or "", body)
+            provider = "telegram"
         else:
             raise SendError(f"unknown channel {channel!r}")
 
@@ -101,3 +105,19 @@ class Messenger:
             raise SendError(f"Viber request failed: {exc}") from exc
         if data.get("status") != 0:
             raise SendError(f"Viber error: {data.get('status_message', data)}")
+
+    async def _telegram(self, chat_id: str, body: str) -> None:
+        s = self.s
+        if not s.telegram_bot_token:
+            raise SendError("Telegram is not configured (TELEGRAM_BOT_TOKEN)")
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.post(
+                    f"https://api.telegram.org/bot{s.telegram_bot_token}/sendMessage",
+                    json={"chat_id": chat_id, "text": body},
+                )
+            data = r.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise SendError(f"Telegram request failed: {type(exc).__name__}") from exc
+        if not data.get("ok"):
+            raise SendError(f"Telegram error: {data.get('description', data)}")
