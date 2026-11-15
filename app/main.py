@@ -188,5 +188,6 @@ def create_app(settings: Settings | None = None, agent: Agent | None = None, bac
 
     return app
 
-
 app = create_app()
+
+app.include_router(web_router)
