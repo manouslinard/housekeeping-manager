@@ -450,3 +450,72 @@ def test_yes_to_all_is_read_by_gemini_not_ambiguous():
     e = _two_jobs_for_maria(llm)
     run(e.agent.handle_inbound("tg-maria", "ναι για όλα"))
     assert len(llm.reply_calls) == 1 and all(j["status"] == "assigned" for j in e.agent.list_jobs())
+
+
+# ---- a new team member takes over jobs she is better placed for -------------------
+def _far_team():
+    """Plaka property, only two far cleaners (Nikos ~13 km, Elena ~12 km): one job offered to the nearer of them."""
+    e = Env()
+    e.add_property("plaka", "Plaka Studio", 37.9715, 23.7300, {"airbnb": "airbnb://plaka"})
+    e.add_cleaner("Nikos", "+306900000002", 38.0735, 23.8118)
+    e.add_cleaner("Elena", "+306900000003", 37.8650, 23.7530)
+    feed_with_checkout(e)
+    run(e.agent.sync_calendars())
+    return e
+
+
+def _add_maria(e, **kw):
+    e.add_cleaner("Maria", MARIA, 37.9755, 23.7348, **kw)  # ~1 km from the hotel
+    return e.db.execute("SELECT id FROM cleaners WHERE name='Maria'").fetchone()[0]
+
+
+def test_new_close_cleaner_takes_the_unanswered_offer():
+    e = _far_team()
+    first = offered_to(e)[0]
+    n_old = len(e.messenger.to(e.db.execute("SELECT phone FROM cleaners WHERE name=?", (first,)).fetchone()[0]))
+    assert run(e.agent.rebalance_for(_add_maria(e))) == 1
+    assert offered_to(e) == [first, "Maria"] and e.agent.list_jobs()[0]["offered_to"] == "Maria"
+    assert e.db.execute("SELECT status FROM offers WHERE id=1").fetchone()[0] == "withdrawn"
+    old_phone = e.db.execute("SELECT phone FROM cleaners WHERE name=?", (first,)).fetchone()[0]
+    assert "new team member" in e.messenger.to(old_phone)[n_old]   # the old cleaner is told not to answer
+    assert any("YES 1" in b for b in e.messenger.to(MARIA))
+
+
+def test_new_far_cleaner_does_not_shuffle_jobs():
+    e = Env()
+    e.add_property("plaka", "Plaka Studio", 37.9715, 23.7300, {"airbnb": "airbnb://plaka"})
+    e.add_cleaner("Maria", MARIA, 37.9755, 23.7348)
+    feed_with_checkout(e)
+    run(e.agent.sync_calendars())
+    e.add_cleaner("Nikos", "+306900000002", 38.0735, 23.8118)
+    nikos = e.db.execute("SELECT id FROM cleaners WHERE name='Nikos'").fetchone()[0]
+    assert run(e.agent.rebalance_for(nikos)) == 0 and offered_to(e) == ["Maria"]
+
+
+def test_confirmed_jobs_are_never_taken_away():
+    e = _far_team()
+    first_phone = e.db.execute("SELECT phone FROM cleaners WHERE name=?", (offered_to(e)[0],)).fetchone()[0]
+    run(e.agent.handle_inbound(first_phone, "yes"))
+    assert run(e.agent.rebalance_for(_add_maria(e))) == 0
+    assert e.agent.list_jobs()[0]["status"] == "assigned"
+
+
+def test_new_member_gets_nothing_until_she_can_be_reached_then_on_linking():
+    e = _far_team()
+    e.settings.dry_run, e.settings.telegram_bot_token = False, "tok"
+    e.db.execute("UPDATE cleaners SET telegram_id='x' WHERE name IN ('Nikos','Elena')")
+    mid = _add_maria(e, telegram_id=None)  # not linked: can't receive anything yet
+    assert run(e.agent.rebalance_for(mid)) == 0
+    run(e.agent.handle_inbound("tg-maria", MARIA))  # she links by phone number
+    assert e.agent.list_jobs()[0]["offered_to"] == "Maria"
+
+
+def test_adding_a_member_in_the_page_moves_jobs_to_her(monkeypatch):
+    async def fake_geocode(db, address):
+        return (37.9755, 23.7348)
+
+    monkeypatch.setattr("app.api.geocode", fake_geocode)
+    e = _far_team()
+    with make_client(e) as c:
+        r = c.post("/api/cleaners", json={"name": "Maria", "phone": MARIA, "address": "x"}).json()
+    assert r["jobs_moved"] == 1 and e.agent.list_jobs()[0]["offered_to"] == "Maria"

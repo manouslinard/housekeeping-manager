@@ -355,7 +355,7 @@ document.addEventListener("submit", async e => {
     }
     const res = await api(f.dataset.api, opts);
     if (res.email_error) toast("Αποθηκεύτηκε, αλλά το email απέτυχε: " + res.email_error, true); else
-    toast(res.emailed ? "Αποθηκεύτηκε · ο σύνδεσμος Telegram στάλθηκε στο " + res.emailed : res.bookings != null ? `Εισήχθησαν ${res.bookings} κρατήσεις` + (res.skipped ? ` · ${res.skipped} παραλείφθηκαν (υπάρχουν ήδη)` : "") : "Αποθηκεύτηκε");
+    toast(res.emailed ? "Αποθηκεύτηκε · ο σύνδεσμος Telegram στάλθηκε στο " + res.emailed + (res.jobs_moved ? ` · της ανατέθηκαν ${res.jobs_moved} δουλειές` : "") : res.jobs_moved ? `Αποθηκεύτηκε · της ανατέθηκαν ${res.jobs_moved} δουλειές` : res.bookings != null ? `Εισήχθησαν ${res.bookings} κρατήσεις` + (res.skipped ? ` · ${res.skipped} παραλείφθηκαν (υπάρχουν ήδη)` : "") : "Αποθηκεύτηκε");
     if (res.first_date) $("#start").value = res.first_date; // show the imported period, not today
     const hotel = f.dataset.api === "/api/rooms" ? f.hotel.value.trim() : null;
     f.reset(); f.closest("dialog").close(); await load();

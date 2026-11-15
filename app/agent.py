@@ -51,6 +51,7 @@ class Agent:
         self.now = now_fn or (lambda: datetime.now(self.tz))
         self.fetch = fetch_fn or fetch_ics
         self.mailer = mailer or Mailer(settings)
+        self._no_llm = False  # True while rebalancing: plain cost order, no Gemini
         self.llm = llm  # app.llm.GeminiClient or a fake; None = no Gemini, the app works as before
         self.lock = asyncio.Lock()
         self._mtimes: dict[str, float | None] = {}
@@ -305,7 +306,7 @@ class Agent:
     async def _llm_pick(self, job, prop, candidates: list) -> list:
         """Let Gemini choose among the candidates (they already pass every hard rule). Its pick goes first; anything
         invalid, any error, or no Gemini = the order the cost function gave."""
-        if self.llm is None or len(candidates) < 2:
+        if self.llm is None or len(candidates) < 2 or self._no_llm:
             return candidates
         sheets = self.export_schedule() or {"schedule": [], "open_jobs": []}
         day = job["checkout_date"]
@@ -369,6 +370,64 @@ class Agent:
         self.x("UPDATE jobs SET status='unfilled', updated_at=? WHERE id=?", (iso(now), job["id"]))
         log.warning("no cleaner available for job %s", job["id"])
         await self._notify_owner("owner_unfilled", **self._job_vars(job, prop, self.s.owner_language))
+
+    async def rebalance_for(self, cleaner_id: int, limit: int = 6) -> int:
+        """A new member joined: give her jobs that were offered to someone else and not answered yet,
+        but only where she is the better choice. Returns how many jobs moved."""
+        async with self.lock:
+            c = self.q1("SELECT * FROM cleaners WHERE id=? AND active=1", (cleaner_id,))
+            return await self._rebalance(c, limit) if c else 0
+
+    async def _rebalance(self, c, limit: int = 6) -> int:
+        """Same cost as the normal assignment (assignment_cost). Confirmed jobs are never touched, and a cleaner who
+        can't be reached yet (hasn't pressed Start) gets nothing: her turn comes when she links."""
+        if not self._reachable(c):
+            return 0
+        held = self._held()
+        today = self.now().date().isoformat()
+        moved, moved_ids = 0, []
+        for j in self.q(
+            """SELECT j.*, o.id AS oid, o.cleaner_id AS old_id FROM jobs j JOIN offers o ON o.job_id=j.id AND o.status='pending'
+               WHERE j.status='offering' AND j.checkout_date >= ? AND o.cleaner_id != ? ORDER BY j.checkout_date, j.checkout_time""",
+            (today, c["id"]),
+        ):
+            if moved >= limit:
+                break
+            prop = self.q1("SELECT * FROM properties WHERE id=?", (j["property_id"],))
+            mine = held.get(c["id"], [])
+            km = haversine_km(prop["lat"], prop["lon"], c["lat"], c["lon"])
+            if self._away(c["id"], j["checkout_date"]) or self._clash(c, j, mine) or (self.s.max_distance_km and km > self.s.max_distance_km):
+                continue
+            slot = (j["checkout_date"], _mins(j["checkout_time"]))
+            old = self.q1("SELECT * FROM cleaners WHERE id=?", (j["old_id"],))
+            old_slots = list(held.get(old["id"], []))
+            if slot in old_slots:
+                old_slots.remove(slot)  # what she would carry without this job
+            old_km = haversine_km(prop["lat"], prop["lon"], old["lat"], old["lon"])
+            if assignment_cost(km, len(mine), self.s.load_penalty_km) >= assignment_cost(old_km, len(old_slots), self.s.load_penalty_km):
+                continue  # the current cleaner is just as good or better: don't shuffle for nothing
+            now_iso = iso(self.now())
+            self.x("UPDATE offers SET status='withdrawn', responded_at=? WHERE id=?", (now_iso, j["oid"]))
+            self.x("UPDATE jobs SET status='pending', updated_at=? WHERE id=?", (now_iso, j["id"]))
+            lang = old["language"]
+            await self._safe_send(old, t(lang, "reassigned", **self._job_vars(j, prop, lang)), j["id"])
+            held[old["id"]] = old_slots
+            held.setdefault(c["id"], []).append(slot)
+            moved += 1
+            moved_ids.append(j["id"])
+        if not moved:
+            return 0
+        self._no_llm = True
+        try:
+            await self._advance()  # the freed jobs are offered again, cheapest first (normally to her)
+        finally:
+            self._no_llm = False
+        marks = ",".join("?" * len(moved_ids))
+        got = self.q1(
+            f"SELECT COUNT(*) AS n FROM offers WHERE cleaner_id=? AND status='pending' AND job_id IN ({marks})", (c["id"], *moved_ids)
+        )["n"]
+        log.info("%d job(s) freed, %d now offered to %s", moved, got, c["name"])
+        return got
 
     async def retry_job(self, job_id: int) -> bool:
         """Owner added cleaners / changed their mind: start a fresh round for an unfilled job."""
@@ -449,6 +508,7 @@ class Agent:
         self.x("UPDATE offers SET status='retired' WHERE cleaner_id=? AND status='failed'", (cleaner["id"],))
         self.x("UPDATE jobs SET status='pending', updated_at=? WHERE status='unfilled'", (iso(self.now()),))
         await self._advance()
+        await self._rebalance(self.q1("SELECT * FROM cleaners WHERE id=?", (cleaner["id"],)))
 
     async def _link_chat(self, chat_id: str, text: str) -> None:
         """A chat id is opaque: match it to a cleaner via the phone number she sends (the one-tap link is the easy way)."""

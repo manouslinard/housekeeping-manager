@@ -168,9 +168,9 @@ def make_router(admin) -> APIRouter:
             (body.name.strip(), phone, *pos, body.address, "telegram",
              email, a.s.default_max_jobs_per_day),
         )
-        out = {"ok": True}
+        cid = a.q1("SELECT id FROM cleaners WHERE phone=?", (phone,))["id"]
+        out = {"ok": True, "jobs_moved": await a.rebalance_for(cid)}  # she takes over jobs she is better placed for
         if email and a.mailer.configured and a.s.telegram_bot_token:
-            cid = a.q1("SELECT id FROM cleaners WHERE phone=?", (phone,))["id"]  # new Telegram cleaner: email her the link now
             try:
                 await email_link(a, cid)
                 out["emailed"] = email
