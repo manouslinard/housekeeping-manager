@@ -171,7 +171,13 @@ class Agent:
                 "SELECT * FROM jobs WHERE property_id=? AND status NOT IN ('cancelled','completed')", (prop["id"],)
             )
         }
+        done = {  # a finished cleaning keeps its day (the unique index allows one job per room and day)
+            r["checkout_date"]
+            for r in self.q("SELECT checkout_date FROM jobs WHERE property_id=? AND status='completed'", (prop["id"],))
+        }
         for checkout, (kind, out_time) in wanted.items():
+            if checkout.isoformat() in done:
+                continue
             nxt = next((s for s in starts if s >= checkout), None) if kind == "checkout" else None
             nxt_iso = nxt.isoformat() if nxt else None
             existing = active.get(checkout.isoformat())
