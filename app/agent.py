@@ -16,7 +16,7 @@ from .llm import LLMError
 from .mailer import Mailer
 from .loaders import load_cleaners, load_properties
 from .messaging import Recipient, SendError
-from .replies import parse_reply
+from .replies import is_simple, parse_reply
 from .schedule_xlsx import read_schedule, write_schedule
 from .templates import fmt_date, t
 
@@ -415,6 +415,8 @@ class Agent:
 
         lang = cleaner["language"]
         intent, job_id = parse_reply(text)
+        if self.llm is not None and intent != "unknown" and not is_simple(text):
+            intent = "unknown"  # longer than a bare answer: let Gemini read the whole sentence, not just its first yes/no word
         if intent in ("yes", "no"):
             await self._answer_offer(cleaner, intent, job_id)
         elif intent == "done":

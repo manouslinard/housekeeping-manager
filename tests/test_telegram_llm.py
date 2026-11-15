@@ -408,3 +408,21 @@ def test_unmentioned_offers_stay_open_without_decline_rest():
     run(e.agent.handle_inbound("telegram", "tg-maria", "όχι την 1"))
     jobs_ = {j["id"]: j for j in e.agent.list_jobs()}
     assert jobs_[2]["offered_to"] == "Maria" and jobs_[1]["offered_to"] != "Maria"
+
+
+def test_long_message_with_a_no_is_read_by_gemini_not_by_the_keyword_parser():
+    llm = FakeLLM(reply={"intent": "answers", "decisions": [{"job_id": 2, "answer": "yes"}], "decline_rest": True})
+    e = _two_jobs_for_maria(llm)
+    run(e.agent.handle_inbound("telegram", "tg-maria", "Μπορώ μόνο για το 2. Όχι στα υπόλοιπα"))
+    assert len(llm.reply_calls) == 1  # used to be caught by "όχι" -> declined job 2, the one she wanted
+    jobs_ = {j["id"]: j for j in e.agent.list_jobs()}
+    assert jobs_[2]["status"] == "assigned" and jobs_[1]["offered_to"] != "Maria"
+
+
+def test_short_answers_never_call_gemini():
+    llm = FakeLLM()
+    e = _two_jobs_for_maria(llm)
+    run(e.agent.handle_inbound("telegram", "tg-maria", "ΝΑΙ 2"))
+    run(e.agent.handle_inbound("telegram", "tg-maria", "όχι 1"))
+    assert llm.reply_calls == []
+    assert {j["id"]: j["status"] for j in e.agent.list_jobs()}[2] == "assigned"
