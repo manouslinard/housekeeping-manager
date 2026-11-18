@@ -5,3 +5,4 @@
 __pycache__/
 .venv/
 data/cleaner_schedules*.xlsx
+.serena/
